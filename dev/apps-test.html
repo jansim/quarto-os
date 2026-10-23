@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quarto OS apps — test harness</title>
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; height: 100%; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; background: #e9ecf2; }
+  #bar { display: flex; gap: 6px; padding: 6px 10px; background: #fff; border-bottom: 1px solid #ddd; align-items: center; flex-wrap: wrap; }
+  #bar button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid #c8c8c8; background: #f8f8f8; cursor: pointer; }
+  #bar .sp { flex: 1; }
+  #desk { position: relative; flex: 1; overflow: hidden; background: linear-gradient(135deg, #7aa7d9 0%, #a98bd1 55%, #e7a2b3 100%); }
+  /* harness window chrome (approximation of the core's) */
+  .qos-window { position: absolute; display: flex; flex-direction: column; border-radius: 10px; overflow: hidden; background: #fff;
+    box-shadow: 0 0 0 .5px rgba(0,0,0,.25), 0 10px 30px rgba(0,0,0,.25), 0 2px 6px rgba(0,0,0,.12); resize: both; min-width: 220px; min-height: 140px; }
+  .qos-window.max { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; border-radius: 0; }
+  .qos-titlebar { flex: none; height: 28px; display: flex; align-items: center; position: relative; background: #ececec; border-bottom: 1px solid #d6d6d6; cursor: default; user-select: none; }
+  .qos-dark .qos-titlebar { background: #2b2b2d; border-bottom-color: #111; color: #ddd; }
+  .qos-lights { display: flex; gap: 8px; padding-left: 10px; z-index: 1; }
+  .qos-lights button { width: 12px; height: 12px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.2); }
+  .l-close { background: #ff5f57; } .l-min { background: #febc2e; } .l-max { background: #28c840; }
+  .qos-window:not(.focused) .qos-lights button { background: #d0d0d0; }
+  .qos-title { position: absolute; left: 70px; right: 70px; text-align: center; font-weight: 600; font-size: 13px; color: #4d4d4d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qos-dark .qos-title { color: #ccc; }
+  .qos-window:not(.focused) .qos-title { color: #a0a0a0; }
+  .qos-body { flex: 1; min-height: 0; position: relative; }
+  .qos-placeholder { position: absolute; inset: 28px 0 0; display: grid; place-items: center; color: #888; background: #f6f6f6; }
+</style>
+<script type="module" src="./apps-harness.js"></script>
+</head>
+<body>
+<div id="bar">
+  <button id="b-term">New Terminal</button>
+  <button id="b-exp">New Explorer</button>
+  <button id="b-code">New VS Code</button>
+  <button id="b-run">Run "git status"</button>
+  <span class="sp"></span>
+  <span id="info"></span>
+</div>
+<div id="desk"></div>
+<script type="module">
+  await import('./apps-harness.js');
+  const os = window.QuartoOS;
+  document.getElementById('b-term').onclick = () => os.open('terminal', { cwd: '~/repo' });
+  document.getElementById('b-exp').onclick = () => os.open('explorer', { path: '~' });
+  document.getElementById('b-code').onclick = () => os.open('vscode', { folder: '~/repo', open: 'hello.py' });
+  document.getElementById('b-run').onclick = () => os.run('git status');
+  document.getElementById('info').textContent = `crossOriginIsolated=${self.crossOriginIsolated} · vm=${new URLSearchParams(location.search).get('vm') || 'mock'}`;
+  const p = new URLSearchParams(location.search);
+  if (p.has('open')) {
+    for (const spec of p.get('open').split(';')) {
+      const [app, ...kv] = spec.split(',');
+      const o = Object.fromEntries(kv.map(s => s.split('=')));
+      await os.open(app, o);
+    }
+  }
+</script>
+</body>
+</html>

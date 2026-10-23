@@ -1,0 +1,277 @@
+---
+title: "Git from zero"
+subtitle: "An interactive lesson: a terminal, a file explorer and VS Code side by side — all on one Linux machine running in your browser."
+page-layout: full
+toc: false
+quarto-os:
+  vm:
+    setup: |
+      # Runs once in the fresh VM, before the windows attach.
+      git config --global user.name "Ada Lovelace"
+      git config --global user.email "ada@example.com"
+      git config --global core.pager cat
+      mkdir -p ~/project
+      cd ~/project
+      cat > README.md <<'EOF'
+      # Recipes
+
+      Our favourite recipes, under version control.
+      EOF
+      cat > pancakes.md <<'EOF'
+      # Pancakes
+
+      - 200 g flour
+      - 300 ml milk
+      - 2 eggs
+      - 1 tbsp sugar
+      - a pinch of salt
+
+      Whisk everything, let it rest for 10 minutes, fry in butter.
+      EOF
+---
+
+:::::: {.lesson-layout}
+
+::::: {.lesson-steps}
+
+::: {.callout-note collapse="true"}
+## For instructors: how this page is built
+The lesson is a single `.qmd` file. A setup script in the front matter prepares the VM
+before any window attaches — every student starts from exactly the same state, and a
+reload gives them a fresh machine:
+
+```yaml
+quarto-os:
+  vm:
+    setup: |
+      git config --global user.name "Ada Lovelace"
+      git config --global user.email "ada@example.com"
+      git config --global core.pager cat
+      mkdir -p ~/project && cd ~/project
+      cat > README.md <<'EOF'
+      # Recipes
+      …
+      EOF
+```
+
+The workspace on the right is three windows in a CSS grid (sticky while you scroll),
+and each step uses run snippets like `` `git status`{.os-run target="git"} ``:
+
+```markdown
+::: {#code .os-window app="vscode" folder="~/project" open="pancakes.md"}
+:::
+::: {#files .os-window app="explorer" path="~/project"}
+:::
+::: {#git .os-window app="terminal" cwd="~/project"}
+:::
+```
+:::
+
+## 0 · Your workspace
+
+On the right you have three windows, all looking at the **same** Linux machine:
+
+- **VS Code** — an editor with the project's files.
+- **Explorer** — the folder `~/project`, *including hidden files*.
+- **Terminal** — a `bash` shell in `~/project`. This is where we type git commands.
+
+Click a grey command to run it in the terminal, or type it yourself. The machine is
+already prepared: a folder `~/project` with two files, and git knows your name:
+
+`git config --global --list`{.os-run target="git"}
+
+::: {.look}
+Two files in the Explorer: `README.md` and `pancakes.md`. No `.git` folder yet — this is
+just a normal folder.
+:::
+
+## 1 · Is this a repository?
+
+`git status`{.os-run target="git"}
+
+Git answers `fatal: not a git repository`. A folder only becomes a repository when we
+ask for it.
+
+## 2 · Create a repository
+
+`git init`{.os-run target="git"}
+
+::: {.look}
+A **`.git`** folder appears in the Explorer. *This* is the repository: git's whole
+database lives in there. Your files next to it are just the "working tree".
+:::
+
+Have a peek inside — what's on the current branch?
+
+`ls .git`{.os-run target="git"} · `cat .git/HEAD`{.os-run target="git"}
+
+## 3 · What does git see?
+
+`git status`{.os-run target="git"}
+
+::: {.look}
+Both files are **untracked**: git sees them, but doesn't manage them yet. In VS Code,
+open the **Source Control** view (the branch icon on the left): the files are marked
+**U** for untracked.
+:::
+
+## 4 · Stage a file
+
+Committing is a two-step process. First we choose what goes into the next commit by
+adding it to the **staging area**:
+
+`git add README.md`{.os-run target="git"} then `git status`{.os-run target="git"}
+
+::: {.look}
+`README.md` is now listed under *Changes to be committed*. In the Explorer, a new file
+**`.git/index`** appeared — that *is* the staging area.
+:::
+
+## 5 · Your first commit
+
+Stage the other file too and save a snapshot with a message:
+
+```{.bash .os-run target="git"}
+git add pancakes.md
+git commit -m "Add README and pancake recipe"
+```
+
+Older git versions call the first branch `master`; let's rename it to `main` and look
+at the history:
+
+```{.bash .os-run target="git"}
+git branch -M main
+git log
+```
+
+::: {.look}
+The commit has an id (a long hash), an author — the name from the setup — and a date.
+Open `.git/objects` in the Explorer: git stored your files there, compressed. The
+Source Control view in VS Code is empty again: nothing has changed since the commit.
+:::
+
+## 6 · Change something
+
+Our pancakes need more sugar. Edit `pancakes.md` in **VS Code** — change `1 tbsp sugar`
+to `2 tbsp sugar` and save with <kbd>Ctrl</kbd>+<kbd>S</kbd> — or let `sed` do it:
+
+`sed -i 's/1 tbsp sugar/2 tbsp sugar/' pancakes.md`{.os-run target="git"}
+
+Now ask git what changed:
+
+`git status`{.os-run target="git"} · `git diff`{.os-run target="git"}
+
+::: {.look}
+`git diff` shows the old line with `-` and the new one with `+`. VS Code marks
+`pancakes.md` with **M** (modified) — click it in the Source Control view to see the
+same diff side by side.
+:::
+
+Stage and commit in one go (`-a` stages all *tracked* files that changed):
+
+`git commit -am "More sugar"`{.os-run target="git"}
+
+## 7 · Branches
+
+A branch is a movable label on a commit. Let's try a waffle recipe without touching
+`main`:
+
+`git checkout -b waffles`{.os-run target="git"}
+
+::: {.look}
+In the Explorer, open `.git/refs/heads`: there's a file per branch, `main` and
+`waffles`. And `cat .git/HEAD`{.os-run target="git"} now points to `waffles`.
+:::
+
+Add a recipe and commit it on the branch:
+
+```{.bash .os-run target="git"}
+printf '# Waffles\n\n- 250 g flour\n- 2 eggs\n- 400 ml milk\n' > waffles.md
+git add waffles.md
+git commit -m "Add waffle recipe"
+```
+
+## 8 · Switch back
+
+`git checkout main`{.os-run target="git"}
+
+::: {.look}
+**`waffles.md` disappears** from the Explorer and from VS Code! It isn't lost: it lives
+in the `waffles` branch. Checking out a branch makes the working tree look like that
+branch's latest commit.
+:::
+
+`git log --oneline --graph --all`{.os-run target="git"}
+
+## 9 · Merge
+
+Happy with the waffles? Bring the branch into `main`:
+
+`git merge waffles`{.os-run target="git"}
+
+::: {.look}
+Git reports a **fast-forward**: `main` simply moved up to the waffle commit, and
+`waffles.md` is back. The graph is a straight line again:
+`git log --oneline --graph --all`{.os-run target="git"}
+:::
+
+## 10 · Challenge: a merge conflict
+
+What if two branches change the *same line*? Make one branch use oat milk while `main`
+reduces the milk:
+
+```{.bash .os-run target="git"}
+git checkout -b oat-milk
+sed -i 's/300 ml milk/300 ml oat milk/' pancakes.md
+git commit -am "Use oat milk"
+git checkout main
+sed -i 's/300 ml milk/250 ml milk/' pancakes.md
+git commit -am "Less milk"
+git merge oat-milk
+```
+
+::: {.look}
+`CONFLICT (content)`. Open `pancakes.md` in VS Code: git wrote **both** versions into
+the file between `<<<<<<<`, `=======` and `>>>>>>>` markers. Decide what the recipe
+should say (`250 ml oat milk`?), delete the markers and save.
+:::
+
+Then tell git the conflict is resolved and finish the merge:
+
+```{.bash .os-run target="git"}
+git add pancakes.md
+git commit --no-edit
+git log --oneline --graph --all
+```
+
+## Done!
+
+You used `init`, `status`, `add`, `commit`, `log`, `diff`, `branch`, `checkout` and
+`merge` — and saw what each one does to the files and to `.git`.
+
+- Want to start over? **Reload the page** — you get a fresh machine.
+- Need another terminal? [New terminal]{.os-launch app="terminal" cwd="~/project" width=560 height=320}
+- More examples: [terminals](terminal.qmd) · [desktop](desktop.qmd) · [slides](slides.qmd)
+
+:::::
+
+::::: {.lesson-workspace}
+
+:::: {.ws-wide}
+::: {#code .os-window app="vscode" title="project — VS Code" folder="~/project" open="pancakes.md" height="42vh"}
+:::
+::::
+
+:::: {.ws-cell}
+::: {#files .os-window app="explorer" title="project" path="~/project" height="40vh"}
+:::
+::::
+
+:::: {.ws-cell}
+::: {#git .os-window app="terminal" title="bash — ~/project" cwd="~/project" height="40vh" theme="dark"}
+:::
+::::
+
+:::::
+
+::::::

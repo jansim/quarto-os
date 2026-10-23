@@ -1,0 +1,166 @@
+---
+title: "Quarto OS in slides"
+subtitle: "Windows, live terminals and a desktop — in reveal.js"
+format:
+  revealjs:
+    width: 1280
+    height: 720
+    slide-number: true
+    transition: fade
+    hash: true
+    css: slides.css
+    footer: "[Quarto OS](../index.html) · ← → to navigate · drag windows by their title bar"
+quarto-os:
+  vm:
+    setup: |
+      git config --global user.name "Presenter"
+      git config --global user.email "presenter@example.com"
+      git config --global core.pager cat
+      mkdir -p ~/talk ~/demo
+      cd ~/demo
+      printf '# Demo\n\nA repository created live on stage.\n' > README.md
+      printf 'print("Hello, audience!")\n' > hello.py
+---
+
+## Windows on slides
+
+:::: {.columns}
+
+::: {.column width="52%"}
+::: {.os-window title="sunset.svg"}
+![](assets/sunset.svg){fig-alt="Illustration of a sunset over hills"}
+:::
+:::
+
+::: {.column width="48%"}
+::: {.os-window title="slides.qmd" theme="dark"}
+```markdown
+## Windows on slides
+
+::: {.os-window title="sunset.svg"}
+![](assets/sunset.svg)
+:::
+```
+:::
+
+Any Markdown — images, code, callouts — in a window. Works in slides exactly like in
+documents.
+:::
+
+::::
+
+## Floating windows
+
+Inside a slide, `float=true` windows are positioned with `x`/`y` on the slide and can be
+**dragged around** during the talk.
+
+::: {.os-window title="flow-field.jpg" float=true x=40 y=232 width=500 height=339}
+![](assets/flow-field.jpg){fig-alt="Generative flow-field artwork"}
+:::
+
+::: {.os-window title="fib.py" float=true x=470 y=300 width=440 height=250 theme="dark"}
+```python
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+
+print([fib(i) for i in range(10)])
+```
+:::
+
+::: {.os-window title="note.md" float=true x=870 y=232 width=330 height=130}
+**Try it:** grab a title bar and move me. Click a window to bring it to the front.
+:::
+
+## A real terminal
+
+:::: {.columns}
+
+::: {.column width="58%"}
+::: {#t1 .os-window app="terminal" title="bash" height="470px" cwd="~/demo" theme="dark"}
+:::
+:::
+
+::: {.column width="42%" .snippets}
+Click to run:
+
+- `ls -la`{.os-run target="t1"}
+- `python3 hello.py`{.os-run target="t1"}
+- `uname -m`{.os-run target="t1"}
+- `date`{.os-run target="t1"}
+
+```{.bash .os-run target="t1"}
+for i in 3 2 1; do
+  echo "$i…"; sleep 1
+done; echo "Liftoff!"
+```
+
+A real Debian VM in the browser, booted when this slide was first shown.
+:::
+
+::::
+
+## Git, live
+
+:::: {.columns}
+
+::: {.column width="56%"}
+::: {#g .os-window app="terminal" title="bash — ~/talk" height="380px" cwd="~/talk"}
+:::
+:::
+
+::: {.column width="44%"}
+::: {.os-window app="explorer" title="talk" path="~/talk" height="380px"}
+:::
+:::
+
+::::
+
+::: {.snippet-row}
+`git init`{.os-run target="g"} → `echo "# Talk" > README.md; git add README.md`{.os-run target="g"} →
+`git commit -m "First commit"`{.os-run target="g"} → `git log --oneline`{.os-run target="g"}
+:::
+
+Watch `.git` appear in the Explorer after `git init`.
+
+## A desktop on a slide
+
+::: {#slide-desk .os-desktop height="560px" title="Quarto OS" wallpaper="assets/wallpaper.svg"}
+
+::: {.os-window title="About" x=40 y=40 width=380 height=200}
+**A desktop in your deck.** The dock opens **new** terminals, editors and explorers —
+as many as you want, all on one VM.
+:::
+
+::: {.os-window app="vscode" title="demo — VS Code" x=460 y=60 width=720 height=380 folder="~/demo" open="hello.py"}
+:::
+
+:::
+
+## Launch buttons
+
+Each button opens a **new** floating window on *this* slide:
+
+::: {.launch-row}
+[Terminal]{.os-launch app="terminal" cwd="~/demo" x=60 y=250 width=560 height=320}
+[VS Code]{.os-launch app="vscode" folder="~/demo" open="README.md" x=380 y=220 width=760 height=420}
+[Explorer]{.os-launch app="explorer" path="~/demo" x=700 y=260 width=480 height=320}
+:::
+
+```markdown
+[Terminal]{.os-launch app="terminal" cwd="~/demo"}
+[VS Code]{.os-launch app="vscode" folder="~/demo" open="README.md"}
+[Explorer]{.os-launch app="explorer" path="~/demo"}
+```
+
+## Thanks!
+
+- Docs & install: [jansim.github.io/quarto-os](https://jansim.github.io/quarto-os/)
+- Source: [github.com/jansim/quarto-os](https://github.com/jansim/quarto-os)
+- This deck's source: [`examples/slides.qmd`](https://github.com/jansim/quarto-os/blob/main/examples/slides.qmd)
+
+```bash
+quarto add jansim/quarto-os
+```

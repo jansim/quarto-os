@@ -1,0 +1,330 @@
+/* Site styles for the Quarto OS docs (not part of the extension). */
+
+:root {
+  --docs-muted: #5b6474;
+  --docs-border: rgba(20, 30, 60, .1);
+  --docs-soft: #f6f7fb;
+  --docs-accent: #2f6fde;
+}
+
+/* ------------------------------------------------------------------ hero */
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.75rem;
+  margin: .5rem 0 2.5rem;
+}
+
+.hero-text .hero-title {
+  font-size: clamp(2.2rem, 4.5vw, 3.4rem);
+  line-height: 1.05;
+  margin: 0 0 .75rem;
+  border: 0;
+}
+
+.hero-text .tagline {
+  display: block;
+  font-size: 1.25rem;
+  line-height: 1.5;
+  color: var(--docs-muted);
+  max-width: 40rem;
+}
+
+.hero-text .hero-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem;
+  margin-top: 1.25rem;
+}
+
+.hero-text .hero-buttons p {
+  display: contents;
+}
+
+.hero-text .hero-buttons a {
+  text-decoration: none;
+}
+
+.hero-stage {
+  position: relative;
+  height: calc(420px * var(--stage-scale, 1));
+  overflow: hidden;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(79, 140, 255, .18), transparent 55%),
+    radial-gradient(circle at 85% 80%, rgba(199, 125, 255, .18), transparent 55%),
+    #f3f5fb;
+  border: 1px solid var(--docs-border);
+}
+
+/* The windows are laid out on an 800 x 420 canvas that a small script in
+   index.qmd scales down to the available width. */
+.hero-stage-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 800px;
+  height: 420px;
+  transform: scale(var(--stage-scale, 1));
+  transform-origin: 0 0;
+}
+
+.install-chip {
+  display: inline-block;
+  font-family: var(--bs-font-monospace);
+  font-size: .95rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: .45rem .9rem;
+  border-radius: 999px;
+  margin-right: .4rem;
+}
+
+.install-chip::before {
+  content: "$ ";
+  color: #7a8bff;
+}
+
+/* ------------------------------------------------------------- stages */
+
+/* A positioned box that floating windows (float=true, x, y) are placed in. */
+.stage {
+  position: relative;
+  min-height: 340px;
+  margin: 1rem 0 1.5rem;
+  border-radius: 14px;
+  background:
+    linear-gradient(rgba(20, 30, 60, .045) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, rgba(20, 30, 60, .045) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--docs-soft);
+  border: 1px dashed rgba(20, 30, 60, .18);
+}
+
+/* ------------------------------------------------------- windows in a row */
+
+.win-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+  margin: 1rem 0 1.5rem;
+}
+
+.win-row.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.win-row.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* ------------------------------------------------- source next to result */
+
+.demo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+  margin: 1rem 0 2rem;
+}
+
+.demo > .demo-source > div.sourceCode,
+.demo > .demo-source > pre {
+  margin: 0;
+}
+
+.demo-label {
+  display: block;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--docs-muted);
+  margin-bottom: .35rem;
+}
+
+/* ------------------------------------------------------------ features */
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+
+.feature {
+  border: 1px solid var(--docs-border);
+  border-radius: 12px;
+  padding: 1rem 1.1rem .4rem;
+  background: #fff;
+}
+
+.feature h3 {
+  font-size: 1.02rem;
+  margin: 0 0 .4rem;
+}
+
+.feature p {
+  font-size: .94rem;
+  color: var(--docs-muted);
+}
+
+/* ----------------------------------------------------- example gallery */
+
+.example-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+
+.example-card {
+  border: 1px solid var(--docs-border);
+  border-radius: 12px;
+  padding: 1rem 1.1rem .3rem;
+  background: linear-gradient(180deg, #fff, var(--docs-soft));
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.example-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(20, 30, 60, .08);
+}
+
+.example-card p:first-child a {
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-decoration: none;
+}
+
+.example-card p {
+  font-size: .93rem;
+  color: var(--docs-muted);
+}
+
+/* ------------------------------------------------------ launch buttons */
+
+.launch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  align-items: center;
+  margin: .75rem 0 1.25rem;
+}
+
+.launch-row p {
+  display: contents;
+}
+
+/* ---------------------------------------------------------- git lesson */
+
+.lesson-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 5fr) minmax(0, 8fr);
+  gap: 2rem;
+  align-items: start;
+}
+
+.lesson-workspace {
+  position: sticky;
+  top: 72px;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: .9rem;
+}
+
+.lesson-workspace > .ws-wide {
+  grid-column: 1 / -1;
+}
+
+.lesson-workspace > div > .qos-window,
+.lesson-workspace > div > div {
+  margin: 0;
+}
+
+.lesson-steps h2 {
+  margin-top: 2.25rem;
+  font-size: 1.45rem;
+}
+
+.lesson-steps h2:first-child {
+  margin-top: 0;
+}
+
+.step {
+  border-left: 3px solid var(--docs-accent);
+  padding: .2rem 0 .2rem 1rem;
+  margin: 1rem 0 1.25rem;
+}
+
+.look {
+  background: var(--docs-soft);
+  border: 1px solid var(--docs-border);
+  border-radius: 10px;
+  padding: .6rem .9rem .1rem;
+  font-size: .93rem;
+  margin: .6rem 0 1rem;
+}
+
+.look::before {
+  content: "What to look at";
+  display: block;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--docs-muted);
+  margin-bottom: .25rem;
+}
+
+/* ---------------------------------------------------------- full bleed */
+
+.workspace-full {
+  margin: 1rem 0 2rem;
+}
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 991.98px) {
+  .demo,
+  .lesson-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lesson-workspace {
+    position: static;
+  }
+
+  .win-row.cols-2,
+  .win-row.cols-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 575.98px) {
+  .stage {
+    overflow: hidden;
+  }
+
+  .lesson-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.lesson-workspace > .ws-wide,
+.lesson-workspace > .ws-cell {
+  min-width: 0;
+}
+
+/* Windows that are direct grid items: drop the auto margins so they stretch. */
+.win-row > .qos-window.qos-ready,
+.lesson-workspace .qos-window.qos-ready {
+  margin: 0;
+}
+
+.demo-result > .qos-window.qos-ready {
+  margin-top: 0;
+  margin-bottom: 0;
+}

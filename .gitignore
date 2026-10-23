@@ -1,0 +1,25 @@
+# Quarto
+/_site/
+/.quarto/
+*_files/
+/.luarc.json
+*.quarto_ipynb
+
+# Node / tooling
+node_modules/
+
+# Dev harness output
+dev/**/out/
+dev/**/*.log
+
+# Editors & OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+**/*.quarto_ipynb
+
+# Copies of the service worker that Quarto drops next to rendered sources
+/coi-serviceworker.js
+/examples/coi-serviceworker.js
