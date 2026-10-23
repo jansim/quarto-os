@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><title>VM Experiments</title></head><body><script type="module">
+// Temporary raw-CheerpX harness for probing (not part of the test suite).
+window.__log = []; window.__status = 'start';
+try {
+  const CheerpX = await import("https://cxrtnc.leaningtech.com/1.4.0/cx.esm.js");
+  const cloud = await CheerpX.CloudDevice.create("wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2");
+  const idb = await CheerpX.IDBDevice.create("exp2"); await idb.reset();
+  const overlay = await CheerpX.OverlayDevice.create(cloud, idb);
+  const data = await CheerpX.DataDevice.create(); window.data = data;
+  const cx = await CheerpX.Linux.create({mounts:[{type:"ext2", dev:overlay, path:"/"},{type:"dir", dev:data, path:"/data"},{type:"devs", path:"/dev"},{type:"devpts", path:"/dev/pts"},{type:"proc", path:"/proc"},{type:"sys", path:"/sys"}]});
+  window.cx = cx;
+  const dec = new TextDecoder();
+  window.__send = cx.setCustomConsole((buf, vt) => { window.__log.push([vt, dec.decode(new Uint8Array(buf))]); }, 80, 24);
+  cx.setActivateConsole((vt) => window.__log.push(['activate', vt]));
+  window.__status = 'booted';
+} catch (e) { window.__status = 'error: ' + e + '\n' + e.stack; }
+</script></body></html>

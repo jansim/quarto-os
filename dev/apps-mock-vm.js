@@ -173,6 +173,7 @@ class Git {
       out(`${existed ? 'Reinitialized existing' : 'Initialized empty'} Git repository in ${dir}/.git/\n`);
       return 0;
     }
+    if (sub === 'config' && args.includes('user.name')) this.ident = true;
     if (sub === 'config' || sub === '--version' || sub === 'version') { if (sub !== 'config') out('git version 2.20.1 (mock)\n'); return 0; }
     const root = this.rootOf(cwd);
     if (!root) { out('fatal: not a git repository (or any of the parent directories): .git\n'); return 128; }
@@ -246,6 +247,7 @@ class Git {
         if (args.includes('-a') || args.includes('-am')) { const wt = this.work(root); for (const p of [...r.index.keys()]) { if (wt.has(p)) r.index.set(p, wt.get(p)); else r.index.delete(p); } }
         const am = args.findIndex(a => a === '-am'); const message = msg || (am >= 0 ? args[am + 1] : '');
         if (!message) { out('Aborting commit due to empty commit message.\n'); return 1; }
+        if (this.ident === false) { out('\n*** Please tell me who you are.\n\nRun\n\n  git config --global user.email "you@example.com"\n  git config --global user.name "Your Name"\n\nfatal: empty ident name (for <user@localhost>) not allowed\n'); return 128; }
         const head = this.head(r);
         const changed = r.index.size !== head.size || [...r.index].some(([p, c]) => head.get(p) !== c);
         if (!changed) { out(`On branch ${r.branch}\nnothing to commit, working tree clean\n`); return 1; }
@@ -419,7 +421,8 @@ class Session {
     if (this.closed) return;
     const s = typeof d === 'string' ? d : dec.decode(d);
     for (const ch of s) {
-      if (this.esc) { this.esc += ch; if (/[A-Za-z~]/.test(ch) && this.esc.length > 2) { this.key(this.esc); this.esc = ''; } continue; }
+      if (this.esc === '\x1b' && ch !== '[' && ch !== 'O') this.esc = '';   // lone ESC
+      else if (this.esc) { this.esc += ch; if (/[A-Za-z~]/.test(ch) && this.esc.length > 2) { this.key(this.esc); this.esc = ''; } continue; }
       if (ch === '\x1b') { this.esc = ch; continue; }
       this.key(ch);
     }
@@ -451,6 +454,7 @@ class MockVM extends Emitter {
     this.home = HOME;
     this.fs = new FS();
     this.git = new Git(this.fs);
+    if (config.noIdent) this.git.ident = false;
     this.shell = new Shell(this);
     this.sessions = new Set();
     this.status = '';

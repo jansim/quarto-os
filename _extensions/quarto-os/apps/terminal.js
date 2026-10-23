@@ -38,6 +38,9 @@ function loadXterm(os) {
 }
 
 const PLACEHOLDER = 'Starting…';
+const stripAnsi = t => t.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '').replace(/\x1b[()][\w]|\x1b./g, '').replace(/\r/g, '');
+// bash shows "user@:" when the VM has no hostname; keep titles tidy.
+const tidyTitle = t => t.replace(/^([^@\s]+)@:\s*/, '$1@quarto-os: ');
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const dim = s => `\x1b[2m${s}\x1b[22m`;
 
@@ -70,7 +73,6 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
     macOptionClickForcesSelection: true,
     rightClickSelectsWord: isMac,
     smoothScrollDuration: 0,
-    overviewRuler: { width: 10 },
   });
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
@@ -111,7 +113,7 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
     return true;
   });
 
-  term.onTitleChange(t => { if (t && opts.onTitle) opts.onTitle(t); });
+  term.onTitleChange(t => { if (t && opts.onTitle) opts.onTitle(tidyTitle(t)); });
 
   // ---------- input
   term.onData(d => {
@@ -131,15 +133,20 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
     const q = queue; queue = [];
     for (const t of q) session.write(t.replace(/\r?\n/g, '\r').replace(/\r+$/, '') + '\r');
   }
-  function markData() {
+  // The shell is "ready" once it printed something that looks like a prompt and then went quiet
+  // (typing earlier makes the tty echo the text before readline redraws it).
+  let tail = '';
+  const tdec = new TextDecoder();
+  function markData(d) {
     gotData = true;
     if (ready) return;
+    tail = (tail + stripAnsi(tdec.decode(d, { stream: true }))).slice(-200);
     clearTimeout(readyTimer);
-    readyTimer = setTimeout(() => { ready = true; flush(); }, 160);
+    readyTimer = setTimeout(() => { ready = true; flush(); }, /[$#%>❯›]\s*$/.test(tail) ? 80 : 1500);
   }
 
   // ---------- boot status
-  let spin = 0, spinTimer = 0, curStatus = '', bootStart = 0, printedBoot = false;
+  let spin = 0, spinTimer = 0, curStatus = '', printedBoot = false;
   function statusLine(sym, text) { term.write(`\r\x1b[2K  ${sym} ${text}`); }
   function onStatus(s) {
     if (!printedBoot || disposed) return;
@@ -152,7 +159,6 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
   }
   function startBootLog(vmObj) {
     printedBoot = true;
-    bootStart = performance.now();
     term.write(`\x1b[1mQuarto OS\x1b[22m ${dim('· starting the Linux VM (first start can take a little while)')}\r\n\r\n`);
     curStatus = '';
     onStatus(vmObj && typeof vmObj.status === 'string' && vmObj.status ? vmObj.status : PLACEHOLDER);
@@ -187,7 +193,7 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
       const quick = await Promise.race([
         Promise.resolve(vmP).then(v => Promise.resolve(v.ready).then(() => true)),
         new Promise(r => setTimeout(() => r(false), 120)),
-      ]).catch(e => { throw e; });
+      ]);
       if (!quick && !disposed) {
         startBootLog(null);
         vm = await vmP;
@@ -209,7 +215,7 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
   async function openShell() {
     if (disposed) return;
     state = 'starting';
-    ready = false; gotData = false;
+    ready = false; gotData = false; tail = '';
     fit();
     const base = { cols: term.cols, rows: term.rows, env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', ...(opts.env || {}) } };
     if (opts.cmd) base.cmd = opts.cmd;
@@ -226,7 +232,7 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
     if (disposed) { try { s.close(); } catch (e) { /* ignore */ } return; }
     session = s;
     state = 'running';
-    s.onData(d => { if (session === s && !disposed) { term.write(d); markData(); } });
+    s.onData(d => { if (session === s && !disposed) { term.write(d); markData(d); } });
     s.onExit(code => {
       if (session !== s || disposed) return;
       session = null; ready = false;
@@ -235,7 +241,7 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
       if (opts.onExit) opts.onExit(code);
     });
     // In case the shell prints nothing for a while, still release queued commands.
-    readyTimer = setTimeout(() => { if (!ready) { ready = true; flush(); } }, 2500);
+    if (!gotData) readyTimer = setTimeout(() => { if (!ready) { ready = true; flush(); } }, 2500);
     if (term.cols && term.rows) try { s.resize(term.cols, term.rows); } catch (e) { /* ignore */ }
   }
 

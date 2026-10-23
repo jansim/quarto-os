@@ -151,7 +151,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     renaming = null; pending = null;
     if (unwatch) unwatch();
     const p = path;
-    unwatch = wm.watch(path, l => { if (p === cwd) setEntries(l); });
+    unwatch = wm.watch(path, (l, err) => { if (p !== cwd) return; if (err && cwd !== '/') go(dirname(cwd)); else if (!err) setEntries(l); });
     if (!explicitTitle) win.setTitle(path === '/' ? 'quarto-os' : basename(path));
     render();
     content.scrollTop = 0;

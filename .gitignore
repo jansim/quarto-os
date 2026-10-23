@@ -3,7 +3,7 @@
 /.quarto/
 *_files/
 /.luarc.json
-*.quarto_ipynb
+**/*.quarto_ipynb
 
 # Node / tooling
 node_modules/
@@ -17,9 +17,3 @@ dev/**/*.log
 .vscode/
 .idea/
 *.swp
-
-**/*.quarto_ipynb
-
-# Copies of the service worker that Quarto drops next to rendered sources
-/coi-serviceworker.js
-/examples/coi-serviceworker.js

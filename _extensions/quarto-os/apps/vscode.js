@@ -138,6 +138,7 @@ let uriSeq = 0;
 export async function mount(win, opts = {}, os = window.QuartoOS) {
   await loadAppCSS(os);
   const root = mountRoot(win, 'qos-vscode');
+  root.tabIndex = -1;   // clicks on non-focusable parts keep keyboard focus inside the window
   const explicitTitle = !!opts.title;
   const uriAuth = 'w' + (++uriSeq);
   const monacoReady = loadMonaco(os);
@@ -205,7 +206,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   const main = h('div.qv-main', null, tabsEl, crumbsEl, editorsEl, panel);
 
   const sbItem = (cls, title, onclick) => h('div.qv-sb-item.' + cls, { title, onclick, role: onclick ? 'button' : null });
-  const sbBranch = sbItem('qv-sb-branch', 'Source Control', () => showView('scm'));
+  const sbBranch = sbItem('qv-sb-branch', 'Source Control', () => showView('scm', true));
   const sbPos = sbItem('qv-sb-pos', 'Go to Line/Column');
   const sbIndent = sbItem('qv-sb-indent', 'Select Indentation');
   const sbEnc = sbItem('qv-sb-enc', 'Select Encoding'); sbEnc.textContent = 'UTF-8';
@@ -249,9 +250,9 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     });
   }
 
-  function showView(v) {
+  function showView(v, ensure = false) {
     const cur = root.classList.contains('qv-side-hidden') ? null : (viewScm.hidden ? 'explorer' : 'scm');
-    if (cur === v) { toggleSidebar(); return; }
+    if (cur === v) { if (!ensure) toggleSidebar(); return; }
     if (root.classList.contains('qv-side-hidden')) toggleSidebar(true);
     viewExplorer.hidden = v !== 'explorer';
     viewScm.hidden = v !== 'scm';
@@ -277,8 +278,8 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     if (mod && !e.shiftKey && !e.altKey && k === 's') { e.preventDefault(); e.stopPropagation(); save(active); }
     else if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') { e.preventDefault(); e.stopPropagation(); togglePanel(); }
     else if (mod && !e.shiftKey && !e.altKey && k === 'b') { e.preventDefault(); e.stopPropagation(); toggleSidebar(); }
-    else if (mod && e.shiftKey && k === 'e') { e.preventDefault(); e.stopPropagation(); showView('explorer'); treeEl.focus(); }
-    else if ((e.ctrlKey || e.metaKey) && e.shiftKey && k === 'g') { e.preventDefault(); e.stopPropagation(); showView('scm'); }
+    else if (mod && e.shiftKey && k === 'e') { e.preventDefault(); e.stopPropagation(); showView('explorer', true); treeEl.focus(); }
+    else if ((e.ctrlKey || e.metaKey) && e.shiftKey && k === 'g') { e.preventDefault(); e.stopPropagation(); showView('scm', true); }
   }, true);
 
   // ---------------------------------------------------------------- notifications
@@ -291,6 +292,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   }
 
   // ---------------------------------------------------------------- init
+  updateStatus();
   const ready = init();
   async function init() {
     loadingEl.hidden = false; welcome.hidden = true;
@@ -469,7 +471,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
           { label: 'Close All', action: async () => { for (const x of [...tabs]) if (!(await closeTab(x))) break; } },
           '-',
           { label: 'Copy Path', action: () => copyText(t.path) },
-          { label: 'Reveal in Explorer View', action: () => { showView('explorer'); revealInTree(t.path); } },
+          { label: 'Reveal in Explorer View', action: () => { showView('explorer', true); revealInTree(t.path); } },
         ], { variant: 'vscode' });
       });
       return el;
@@ -733,7 +735,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   }
   async function newItem(type, dir) {
     if (!folder) return;
-    showView('explorer');
+    showView('explorer', true);
     if (dir !== folder) await toggleDir(dir, true);
     tree.edit = { mode: 'new', type, dir };
     renderTree();
@@ -964,7 +966,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
       }
     };
     if (git.staged.length) group('Staged Changes', git.staged, true);
-    group('Changes', git.changes, false);
+    if (git.changes.length) group('Changes', git.changes, false);
     if (git.error) sections.push(h('div.qv-tree-msg.err', { text: git.error }));
     scmList.replaceChildren(...sections);
   }
@@ -1018,9 +1020,24 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
       all = true;
     }
     scmCommit.disabled = true;
-    const ok = await gitRun(`${all ? 'git add -A && ' : ''}git commit -q -m ${shq(msg)}`, 'commit');
-    scmCommit.disabled = false;
-    if (ok) { scmMsg.value = ''; autoGrow(); }
+    try {
+      const cwd = git.root || folder;
+      let r = await vmExec(vm, `${all ? 'git add -A && ' : ''}git commit -q -m ${shq(msg)}`, cwd);
+      if (r.code !== 0 && /tell me who you are|empty ident|auto-detect email/i.test(r.output || '')) {
+        const ok = await dialog(root, {
+          title: 'Git doesn\u2019t know who you are yet', icon: 'info',
+          message: 'Every commit records an author. Set yours in the terminal:\n\ngit config --global user.name "Your Name"\ngit config --global user.email "you@example.com"\n\nor continue with a placeholder identity.',
+          buttons: [{ label: 'Use a Placeholder Identity', value: true, primary: true }, { label: 'Cancel', value: false, cancel: true }],
+        });
+        if (ok) {
+          await vmExec(vm, 'git config --global user.name "Student" && git config --global user.email "student@example.com"', cwd);
+          r = await vmExec(vm, `git commit -q -m ${shq(msg)}`, cwd);
+        } else r = null;
+      }
+      if (r && r.code !== 0) notify(`Git: commit failed.\n${String(r.output || '').trim()}`, 'error');
+      else if (r) { scmMsg.value = ''; autoGrow(); }
+      await refreshGit(true);
+    } finally { scmCommit.disabled = false; }
   }
   async function initRepo() {
     const r = await vmExec(vm, 'git init', folder);

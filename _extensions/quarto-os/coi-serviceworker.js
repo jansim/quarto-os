@@ -4,6 +4,9 @@
  *  - the COEP mode can be chosen with the registration URL
  *    (`coi-serviceworker.js?coep=credentialless`), so it survives service worker
  *    restarts (upstream only kept it in a variable set by a page message);
+ *  - only top-level pages that use the Quarto OS VM (they carry
+ *    <meta name="quarto-os-vm">) are cross-origin isolated, so the other pages
+ *    in the worker's scope keep working with cross-origin iframes and popups;
  *  - quarto-os.js registers this worker itself (only on pages that use the VM)
  *    and reloads the page once; the window-side code below still works when the
  *    file is included directly with <script src="coi-serviceworker.js">.
@@ -31,6 +34,7 @@
  * SOFTWARE.
  */
 let coepCredentialless = false;
+const vmPage = /<meta[^>]+name="quarto-os-vm"|&quot;app&quot;:&quot;(?:terminal|vscode|explorer)&quot;/;
 if (typeof window === 'undefined') {
     try {
         coepCredentialless = new URL(self.location.href).searchParams.get("coep") === "credentialless";
@@ -69,9 +73,22 @@ if (typeof window === 'undefined') {
             : r;
         event.respondWith(
             fetch(request)
-                .then((response) => {
+                .then(async (response) => {
                     if (response.status === 0) {
                         return response;
+                    }
+
+                    let body = response.body;
+                    if (r.mode === "navigate" && r.destination === "document" &&
+                        /html/.test(response.headers.get("content-type") || "")) {
+                        body = await response.arrayBuffer();
+                        if (!vmPage.test(new TextDecoder().decode(body))) {
+                            return new Response(body, {
+                                status: response.status,
+                                statusText: response.statusText,
+                                headers: response.headers,
+                            });
+                        }
                     }
 
                     const newHeaders = new Headers(response.headers);
@@ -83,7 +100,7 @@ if (typeof window === 'undefined') {
                     }
                     newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
 
-                    return new Response(response.body, {
+                    return new Response(body, {
                         status: response.status,
                         statusText: response.statusText,
                         headers: newHeaders,

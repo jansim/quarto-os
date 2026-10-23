@@ -45,18 +45,18 @@ export function loadCSS(os, url) {
 export function mountRoot(win, cls) {
   const body = win.body;
   if (getComputedStyle(body).position === 'static') body.style.position = 'relative';
-  const root = h('div.qos-app.' + cls);
+  const root = h('div.qa-root.' + cls);
   body.appendChild(root);
   isolateKeys(root);
   return root;
 }
 
 export function isDark(win, opts, os) {
-  const t = opts && opts.theme;
-  if (t) return t === 'dark';
   const el = win && win.el;
-  if (el && (el.classList.contains('qos-dark') || el.classList.contains('qos-theme-dark') || el.dataset.theme === 'dark')) return true;
-  return !!(os && os.config && os.config.theme === 'dark');
+  if (el && el.classList.contains('qos-dark')) return true;
+  const t = (opts && opts.theme) || (os && os.config && os.config.theme);
+  if (t === 'auto') return document.body.classList.contains('quarto-dark');
+  return t === 'dark';
 }
 
 /** Subscribe to an emitter (vm / win), returning a disposer whatever the emitter's style. */
@@ -327,12 +327,10 @@ export function dialog(root, { title, message, buttons = [{ label: 'OK', value: 
   });
 }
 
-/** Open another app near the current window (same desktop if any). */
+/** Open another app next to the current window (core places it in the same desktop / slide / overlay via `origin`). */
 export function openApp(os, win, app, opts) {
   const o = { ...opts };
-  const desk = win && win.el && win.el.closest('.qos-desktop');
-  if (desk && desk.id && !o.target) o.target = desk.id;
-  if (win && win.id) o.opener = win.id;
+  if (win && win.el && !o.target) o.origin = win.el;
   return os.open(app, o);
 }
 
@@ -368,7 +366,7 @@ export function watchManager(vm) {
         w = { cbs: new Set(), off: null };
         map.set(dir, w);
         try {
-          const r = vm.watch(dir, entries => { for (const f of [...w.cbs]) { try { f(entries); } catch (e) { console.error(e); } } });
+          const r = vm.watch(dir, (entries, err) => { for (const f of [...w.cbs]) { try { f(entries || [], err); } catch (e) { console.error(e); } } });
           w.off = typeof r === 'function' ? r : (r && typeof r.then === 'function' ? () => r.then(u => typeof u === 'function' && u()) : null);
         } catch (e) { console.warn('[quarto-os] watch failed', dir, e); }
       }

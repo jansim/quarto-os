@@ -103,13 +103,21 @@ local function note_app(app)
   if VM_APPS[app] then S.vm = true end
 end
 
--- coi-serviceworker.js lands next to the page (only for pages that use the VM)
+-- Pages that use the VM get coi-serviceworker.js (as an html dependency service
+-- worker: copied to the project output root for websites, next to the page for
+-- single documents) and a <meta name="quarto-os-vm"> marker; the service worker
+-- only cross-origin-isolates pages carrying that marker.
 local function add_coi(meta)
   if S.coi then return end
   local m = meta and meta["quarto-os"]
   if m and pandoc.utils.type(m) == "table" and m.coi == false then return end
   S.coi = true
-  quarto.doc.add_format_resource("coi-serviceworker.js")
+  quarto.doc.add_html_dependency({
+    name = "quarto-os-coi",
+    version = VERSION,
+    meta = { ["quarto-os-vm"] = "true" },
+    serviceworkers = { "coi-serviceworker.js" },
+  })
 end
 
 local function note_dock(dock)
@@ -374,6 +382,9 @@ local function Pandoc(doc)
   if type(vm) == "table" and vm.autoboot == true then S.vm = true end
   cfg.usesVM = S.vm
   cfg.version = VERSION
+  -- where coi-serviceworker.js is served, relative to this page
+  local off = quarto.project and quarto.project.offset
+  cfg.coiUrl = (off and off ~= "") and (off .. "/coi-serviceworker.js") or "coi-serviceworker.js"
   local js = json(cfg):gsub("</", "<\\/")
   quarto.doc.include_text("in-header",
     '<script type="application/json" id="quarto-os-config">' .. js .. "</script>")

@@ -126,7 +126,8 @@ dev/                     test harnesses and a static dev server
 ```
 
 - **Build the agent** (static i386 binary, cross-compiled with [zig](https://ziglang.org)):
-  `agent/build.sh` writes `_extensions/quarto-os/vm/qos-agent`.
+  `agent/build.sh` writes `_extensions/quarto-os/vm/qos-agent` (commit the result). It
+  uses `zig` from `PATH`; with the PyPI package use `ZIG="python -m ziglang" agent/build.sh`.
 - **Render the docs site**: `quarto render` (outputs to `_site/`).
 - **Serve it locally** with cross-origin isolation headers and range requests:
 
@@ -136,7 +137,8 @@ dev/                     test harnesses and a static dev server
   ```
 
 - **Regenerate the demo assets** (image + looping video, needs ffmpeg + Playwright):
-  `node dev/docs-assets.mjs`.
+  `node dev/docs-assets.mjs`; the README screenshot comes from
+  `node dev/docs-screenshot.mjs` (with the dev server running on port 8204).
 
 ### Publishing the examples
 

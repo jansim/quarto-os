@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VM Layer Tests</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --ok: #1a7f37; --bad: #cf222e; --dim: #6e7781; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #e6e6e6; --ok: #4ac26b; --bad: #ff7b72; --dim: #8b949e; } }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 16px; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .dim { color: var(--dim); }
+  pre { white-space: pre-wrap; word-break: break-all; margin: 0; }
+</style>
+</head>
+<body>
+<h3>Quarto OS — VM layer tests</h3>
+<p class="dim">Serve with <code>node dev/server.mjs . 8201</code> and open
+<code>/dev/vm-test.html</code> (suites: <code>?suite=main</code>, <code>?suite=persist1|persist2|persist3&amp;cache=ID</code>).</p>
+<pre id="out"></pre>
+<script type="module">
+import { createVM } from '../_extensions/quarto-os/vm/vm.js';
+
+const params = new URLSearchParams(location.search);
+const suite = params.get('suite') || 'main';
+const out = document.getElementById('out');
+const results = [];
+const timings = {};
+const statuses = [];
+window.__results = results;
+window.__timings = timings;
+window.__statuses = statuses;
+
+const print = (text, cls) => {
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = text + '\n';
+  out.append(span);
+  console.log(text);
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+const r1 = (x) => Math.round(x * 10) / 10;
+function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
+function within(p, ms, what) {
+  return Promise.race([p, new Promise((_, j) => setTimeout(() => j(new Error(`timeout (${ms} ms): ${what}`)), ms))]);
+}
+
+async function test(name, fn) {
+  const t0 = performance.now();
+  try {
+    const info = await within(Promise.resolve().then(fn), 90000, name);
+    const ms = Math.round(performance.now() - t0);
+    results.push({ name, ok: true, ms, info });
+    print(`PASS ${name} (${ms} ms)${info ? ' — ' + (typeof info === 'string' ? info : JSON.stringify(info)) : ''}`, 'ok');
+  } catch (e) {
+    results.push({ name, ok: false, error: String(e && e.stack || e) });
+    print(`FAIL ${name}: ${e && e.message || e}`, 'bad');
+  }
+}
+
+// Collects a session's output as text and waits for patterns in it.
+function collect(s) {
+  const td = new TextDecoder();
+  const c = { text: '', lastAt: 0, waiters: new Set(), exit: null };
+  s.onData((u8) => {
+    c.text += td.decode(u8, { stream: true });
+    c.lastAt = performance.now();
+    for (const w of c.waiters) if (w.re.test(c.text.slice(w.from))) { c.waiters.delete(w); w.resolve(c.text.slice(w.from)); }
+  });
+  s.onExit((code) => { c.exit = code; });
+  c.mark = () => c.text.length;
+  c.wait = (re, from = 0, ms = 20000) => {
+    if (re.test(c.text.slice(from))) return Promise.resolve(c.text.slice(from));
+    return within(new Promise((resolve) => c.waiters.add({ re, from, resolve })), ms, `output ${re}`);
+  };
+  return c;
+}
+// Runs a shell command line in a session and waits for a unique end marker.
+let seq = 0;
+async function run(s, c, cmd, ms) {
+  const tag = `END${++seq}`;
+  const from = c.mark();
+  s.write(`${cmd}; echo "${tag.slice(0, 3)}""${tag.slice(3)}:$?"\r`);
+  const text = await c.wait(new RegExp(`${tag}:(\\d+)`), from, ms);
+  return { text, code: +new RegExp(`${tag}:(\\d+)`).exec(text)[1] };
+}
+async function sha256(u8) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', u8));
+  return [...d].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const T0 = performance.now();
+let vm;
+
+async function boot(config) {
+  vm = await createVM(config, { baseUrl: new URL('../_extensions/quarto-os/', location.href).href });
+  window.vm = vm;
+  vm.on('status', (m) => { statuses.push([Math.round(performance.now() - T0), m]); print(`  status: ${m}`, 'dim'); });
+  await vm.ready;
+  timings.timeToReadyMs = Math.round(performance.now() - T0);
+}
+
+async function mainSuite() {
+  await test('boot: createVM + ready', async () => {
+    await boot({ setup: 'mkdir -p ~/from-setup\necho "SETUP OUTPUT LINE"\n' });
+    assert(vm.home === '/home/user', 'home');
+    return { timeToReadyMs: timings.timeToReadyMs, statuses: statuses.map((s) => s[1]).slice(0, 8) };
+  });
+  if (!vm || !vm.isReady) return;
+
+  await test('setup script ran once, output on status channel', async () => {
+    assert(statuses.some((s) => s[1] === 'SETUP OUTPUT LINE'), 'setup output not seen in status');
+    assert((await vm.stat('~/from-setup'))?.type === 'dir', 'setup did not create ~/from-setup');
+    const marks = await vm.ls('~/.cache/quarto-os');
+    assert(marks.some((e) => e.name.startsWith('setup-')), 'marker missing');
+    return marks.map((e) => e.name).join(',');
+  });
+
+  await test('ping round trip', async () => {
+    const t = [];
+    for (let i = 0; i < 20; i++) t.push(await vm.ping());
+    timings.pingMedianMs = r1(median(t));
+    return `median ${timings.pingMedianMs} ms, min ${r1(Math.min(...t))} ms`;
+  });
+
+  await test('exec: output, stderr merge, exit code, latency', async () => {
+    const r = await vm.exec('echo out; echo err >&2; exit 3');
+    assert(r.code === 3, 'code ' + r.code);
+    assert(r.output === 'out\nerr\n', JSON.stringify(r.output));
+    const t = [];
+    for (let i = 0; i < 8; i++) { const t0 = performance.now(); const x = await vm.exec('true'); t.push(performance.now() - t0); assert(x.code === 0); }
+    timings.execTrueMedianMs = r1(median(t));
+    const t1 = performance.now(); await vm.exec('echo hi'); timings.execEchoMs = r1(performance.now() - t1);
+    return `exec('true') median ${timings.execTrueMedianMs} ms`;
+  });
+
+  await test('exec: cwd with ~, env, missing cwd rejects', async () => {
+    await vm.mkdir('~/a/b/c');
+    const r = await vm.exec('pwd; echo "$FOO $HOME $USER $LANG"', { cwd: '~/a/b', env: { FOO: 'bar' } });
+    assert(r.output === '/home/user/a/b\nbar /home/user user C.UTF-8\n', JSON.stringify(r.output));
+    let err;
+    try { await vm.exec('true', { cwd: '~/nope' }); } catch (e) { err = e; }
+    assert(err && err.code === 'ENOENT' && /nope/.test(err.message), 'expected ENOENT, got ' + err);
+    return err.message;
+  });
+
+  await test('exec: AbortSignal kills the command', async () => {
+    const ac = new AbortController();
+    const t0 = performance.now();
+    const p = vm.exec('echo started; sleep 20; echo never', { signal: ac.signal });
+    await sleep(500);
+    ac.abort();
+    const r = await p;
+    assert(!/never/.test(r.output) && r.code !== 0 && performance.now() - t0 < 5000, JSON.stringify(r));
+    return `code ${r.code}`;
+  });
+
+  await test('mkdir -p / stat / ls / ~ expansion', async () => {
+    await vm.mkdir('~/t1/x/y');
+    await vm.mkdir('~/t1/x/y'); // idempotent
+    const st = await vm.stat('~/t1/x');
+    assert(st && st.type === 'dir' && st.mtime > 1.6e12, JSON.stringify(st));
+    assert((await vm.stat('~/t1/missing')) === null, 'stat of missing path should be null');
+    await vm.writeFile('~/t1/f.txt', 'hello');
+    await vm.exec('ln -s f.txt ~/t1/link; ln -s nowhere ~/t1/dangling; ln -s x ~/t1/dirlink');
+    const ls = await vm.ls('~/t1');
+    const names = ls.map((e) => e.name).join(',');
+    assert(names === 'dangling,dirlink,f.txt,link,x', names);
+    const f = ls.find((e) => e.name === 'f.txt');
+    assert(f.type === 'file' && f.size === 5 && Math.abs(f.mtime - Date.now()) < 120000, JSON.stringify(f));
+    assert(ls.find((e) => e.name === 'link').type === 'link' && ls.find((e) => e.name === 'link').linkType === 'file');
+    assert(ls.find((e) => e.name === 'dirlink').linkType === 'dir');
+    assert(ls.find((e) => e.name === 'dangling').linkType === null);
+    assert((await vm.stat('~/t1/dirlink')).type === 'dir', 'stat follows links');
+    assert((await vm.stat('~/t1/dangling')).type === 'link', 'dangling link');
+    const home = await vm.ls('~');
+    assert(!home.some((e) => e.name === '.' || e.name === '..'), 'no . / ..');
+    return ls.map((e) => `${e.name}:${e.type}${e.linkType !== undefined ? '->' + e.linkType : ''}`).join(' ');
+  });
+
+  await test('writeFile/readText: UTF-8 text, empty file, overwrite', async () => {
+    const text = 'héllo wörld — ✓ 你好 🎉\nline2\n';
+    await vm.writeFile('~/t1/u.txt', text);
+    assert(await vm.readText('~/t1/u.txt') === text, 'utf-8 roundtrip');
+    const r = await vm.exec('wc -c < ~/t1/u.txt');
+    assert(+r.output.trim() === new TextEncoder().encode(text).length, 'size in VM ' + r.output);
+    await vm.writeFile('~/t1/u.txt', 'short');
+    assert(await vm.readText('~/t1/u.txt') === 'short', 'truncate on overwrite');
+    await vm.writeFile('~/t1/empty', '');
+    assert((await vm.readFile('~/t1/empty')).length === 0, 'empty file');
+    return 'ok';
+  });
+
+  for (const [label, threshold] of [['DataDevice bulk path', 64 * 1024], ['console path', Infinity]]) {
+    await test(`200 KB binary write/read roundtrip (${label})`, async () => {
+      const n = 200 * 1024;
+      const data = new Uint8Array(n);
+      for (let o = 0; o < n; o += 65536) crypto.getRandomValues(data.subarray(o, o + 65536));
+      for (let i = 0; i < 256; i++) data[i] = i; // every byte value
+      vm._bulkWrite = threshold;
+      const t0 = performance.now();
+      await vm.writeFile('~/t1/bin.dat', data);
+      const tw = performance.now() - t0;
+      vm._bulkWrite = 64 * 1024;
+      const t1 = performance.now();
+      const back = await vm.readFile('~/t1/bin.dat');
+      const tr = performance.now() - t1;
+      assert(back.length === n, 'length ' + back.length);
+      for (let i = 0; i < n; i++) if (back[i] !== data[i]) throw new Error('mismatch at ' + i);
+      const vmSum = (await vm.exec('sha256sum ~/t1/bin.dat')).output.split(' ')[0];
+      assert(vmSum === await sha256(data), 'sha256 differs in VM');
+      const key = threshold === Infinity ? 'console' : 'bulk';
+      timings[`write200k_${key}Ms`] = Math.round(tw);
+      timings[`read200kMs`] = Math.round(tr);
+      return `write ${Math.round(tw)} ms, read ${Math.round(tr)} ms`;
+    });
+  }
+
+  await test('readFile: 2 MB file generated in the VM', async () => {
+    await vm.exec('head -c 2000000 /dev/urandom > ~/t1/big.dat');
+    const t0 = performance.now();
+    const b = await vm.readFile('~/t1/big.dat');
+    const t = performance.now() - t0;
+    assert(b.length === 2000000, 'len ' + b.length);
+    const vmSum = (await vm.exec('sha256sum ~/t1/big.dat')).output.split(' ')[0];
+    assert(vmSum === await sha256(b), 'sha256');
+    timings.read2MBMs = Math.round(t);
+    return `${Math.round(t)} ms (${r1(2000 / t)} MB/s)`;
+  });
+
+  await test('rename / remove -r / errors', async () => {
+    await vm.mkdir('~/t2/sub/deep');
+    await vm.writeFile('~/t2/sub/deep/x', 'x');
+    await vm.rename('~/t2/sub', '~/t2/moved');
+    assert(await vm.stat('~/t2/sub') === null && (await vm.stat('~/t2/moved/deep/x')).type === 'file', 'rename');
+    await vm.remove('~/t2');
+    assert(await vm.stat('~/t2') === null, 'remove -r');
+    await vm.remove('~/t2'); // missing: no error
+    const errs = [];
+    for (const f of [() => vm.readFile('~/nope.txt'), () => vm.ls('~/t1/f.txt'), () => vm.readFile('~/t1'),
+      () => vm.writeFile('/etc/forbidden', 'x'), () => vm.rename('~/nope', '~/nope2'), () => vm.remove('/')]) {
+      try { await f(); errs.push('NO ERROR'); } catch (e) { errs.push(`${e.code}: ${e.message}`); }
+    }
+    assert(errs[0].startsWith('ENOENT') && errs[1].startsWith('ENOTDIR') && errs[2].startsWith('EISDIR') &&
+      errs[3].startsWith('EACCES') && errs[4].startsWith('ENOENT') && errs[5].startsWith('EPERM'), errs.join(' | '));
+    return errs.join(' | ');
+  });
+
+  let s1, c1, s2, c2;
+  await test('two concurrent sessions', async () => {
+    const t0 = performance.now();
+    [s1, s2] = await Promise.all([vm.openSession({ cols: 80, rows: 24 }), vm.openSession({ cols: 100, rows: 30, cwd: '~/a' })]);
+    c1 = collect(s1); c2 = collect(s2);
+    const [a, b] = await Promise.all([run(s1, c1, 'tty; pwd; stty size'), run(s2, c2, 'tty; pwd; stty size')]);
+    timings.firstSessionPromptMs = Math.round(performance.now() - t0);
+    assert(/\/dev\/pts\/\d+/.test(a.text) && /\/dev\/pts\/\d+/.test(b.text), 'tty');
+    const ttyA = /\/dev\/pts\/\d+/.exec(a.text)[0], ttyB = /\/dev\/pts\/\d+/.exec(b.text)[0];
+    assert(ttyA !== ttyB, 'distinct ptys');
+    assert(/\/home\/user\r?\n/.test(a.text) && /\/home\/user\/a\r?\n/.test(b.text), 'cwd');
+    assert(/24 80/.test(a.text) && /30 100/.test(b.text), 'initial size');
+    assert(s1.pid > 0 && s2.pid > 0 && s1.pid !== s2.pid, 'pids');
+    const env = await run(s1, c1, 'echo "$TERM|$LANG|$SHELL|$USER|$HOME|$PATH"; id -u; shopt -q login_shell && echo LOGIN');
+    assert(env.text.includes('xterm-256color|C.UTF-8|/bin/bash|user|/home/user|/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'), env.text);
+    assert(/\b1000\b/.test(env.text) && /LOGIN/.test(env.text), 'uid 1000 + login shell');
+    return `${ttyA} ${ttyB}, both prompts after ${timings.firstSessionPromptMs} ms`;
+  });
+  if (!s1) return;
+
+  await test('resize: stty size + SIGWINCH to the foreground job', async () => {
+    s1.resize(120, 40);
+    const r = await run(s1, c1, 'stty size');
+    assert(/40 120/.test(r.text), r.text);
+    const from = c1.mark();
+    s1.write(`sh -c 'trap "echo WINCH \\$(stty size)" WINCH; echo TRAPPED; while :; do sleep 0.1; done'\r`);
+    await c1.wait(/TRAPPED/, from);
+    s1.resize(90, 33);
+    const w = await c1.wait(/WINCH 33 90/, from, 5000);
+    s1.write('\x03');
+    await run(s1, c1, 'true');
+    return w.trim().split('\n').pop().trim();
+  });
+
+  await test('keystroke echo latency (idle)', async () => {
+    const t = [];
+    for (let i = 0; i < 20; i++) {
+      const ch = String.fromCharCode(97 + i);
+      const from = c1.mark();
+      const t0 = performance.now();
+      s1.write(ch);
+      await c1.wait(new RegExp(ch), from, 5000);
+      t.push(performance.now() - t0);
+    }
+    s1.write('\x15'); // ^U: clear the line
+    await sleep(100);
+    timings.echoMedianMs = r1(median(t));
+    timings.echoMaxMs = r1(Math.max(...t));
+    return `median ${timings.echoMedianMs} ms, max ${timings.echoMaxMs} ms`;
+  });
+
+  await test('Ctrl-C: at the prompt and on a running command', async () => {
+    let from = c1.mark();
+    s1.write('echo this-line-is-cancelled');
+    await c1.wait(/cancelled/, from);
+    s1.write('\x03');
+    await sleep(300);
+    const r = await run(s1, c1, 'echo after-ctrl-c');
+    assert(!/this-line-is-cancelled\S*after/.test(r.text) && !/command not found/.test(c1.text.slice(from)), 'line not cancelled: ' + JSON.stringify(c1.text.slice(from)));
+    from = c1.mark();
+    const t0 = performance.now();
+    s1.write('sleep 30\r');
+    await sleep(800);
+    s1.write('\x03');
+    const r2 = await run(s1, c1, 'echo back');
+    const ms = performance.now() - t0 - 800;
+    assert(ms < 5000, 'sleep not interrupted');
+    return `prompt back ${Math.round(ms)} ms after ^C`;
+  });
+
+  await test('exec does not block terminals (and vice versa)', async () => {
+    // A long exec running while we type.
+    const slow = vm.exec('sleep 2; echo slow-done');
+    await sleep(200);
+    const t = [];
+    for (let i = 0; i < 5; i++) {
+      const from = c2.mark(), t0 = performance.now();
+      s2.write('x');
+      await c2.wait(/x/, from, 5000);
+      t.push(performance.now() - t0);
+    }
+    s2.write('\x15');
+    const r = await slow;
+    assert(r.output === 'slow-done\n', r.output);
+    timings.echoDuringExecMedianMs = r1(median(t));
+    // A busy terminal (CPU loop + output) while we exec.
+    const from = c1.mark();
+    s1.write('while :; do echo tick; done\r');
+    await c1.wait(/tick/, from);
+    const e = [];
+    for (let i = 0; i < 5; i++) { const t0 = performance.now(); const x = await vm.exec('echo hi'); e.push(performance.now() - t0); assert(x.output === 'hi\n'); }
+    s1.write('\x03');
+    await run(s1, c1, 'true');
+    timings.execWhileBusyMedianMs = r1(median(e));
+    return `echo during exec ${timings.echoDuringExecMedianMs} ms, exec while terminal floods ${timings.execWhileBusyMedianMs} ms`;
+  });
+
+  await test('git workflow (exec + terminal)', async () => {
+    const r = await vm.exec([
+      'set -e', 'mkdir -p ~/repo && cd ~/repo', 'git init -q .',
+      'printf "# Hello\\n" > README.md', 'git add README.md',
+      'git -c user.name="Quarto OS" -c user.email=os@example.com commit -q -m "first commit"',
+      'git log --oneline',
+    ].join('\n'));
+    assert(r.code === 0 && /first commit/.test(r.output), JSON.stringify(r));
+    const ls = await vm.ls('~/repo');
+    assert(ls.some((e) => e.name === '.git' && e.type === 'dir'), '.git listed');
+    assert((await vm.readText('~/repo/.git/HEAD')).startsWith('ref: refs/heads/'), 'HEAD');
+    await vm.writeFile('~/repo/README.md', '# Hello\nchanged from JS\n');
+    const t = await run(s2, c2, 'cd ~/repo && git status --short && git diff --stat | cat');
+    assert(/M README.md/.test(t.text), t.text);
+    return r.output.trim();
+  });
+
+  await test('watch fires after a terminal touch', async () => {
+    await vm.mkdir('~/wdir');
+    const seen = [];
+    let resolveNew;
+    const gotNew = new Promise((r) => { resolveNew = r; });
+    const unwatch = vm.watch('~/wdir', (entries) => {
+      seen.push(entries.map((e) => e.name));
+      if (entries.some((e) => e.name === 'touched.txt')) resolveNew(performance.now());
+    });
+    await sleep(500);
+    assert(seen.length === 1 && seen[0].length === 0, 'initial callback with empty listing: ' + JSON.stringify(seen));
+    const t0 = performance.now();
+    s2.write('touch ~/wdir/touched.txt\r');
+    const t1 = await within(gotNew, 8000, 'watch callback');
+    timings.watchAfterTouchMs = Math.round(t1 - t0);
+    // A second watcher of the same dir gets the current listing at once.
+    const second = await new Promise((r) => { const u = vm.watch('~/wdir', (e) => { u(); r(e); }); });
+    assert(second.some((e) => e.name === 'touched.txt'), 'second watcher');
+    // Changes made through the API are noticed too.
+    const t2 = performance.now();
+    const removed = new Promise((r) => { const u = vm.watch('~/wdir', (e) => { if (!e.length) { u(); r(performance.now()); } }); });
+    await vm.remove('~/wdir/touched.txt');
+    timings.watchAfterRemoveMs = Math.round(await within(removed, 8000, 'watch after remove') - t2);
+    unwatch();
+    return `touch→callback ${timings.watchAfterTouchMs} ms, remove→callback ${timings.watchAfterRemoveMs} ms`;
+  });
+
+  await test('activity event', async () => {
+    let n = 0;
+    const off = vm.on('activity', () => n++);
+    await run(s1, c1, 'echo activity');
+    await sleep(700);
+    off();
+    assert(n >= 1, 'no activity');
+    return `${n} event(s)`;
+  });
+
+  await test('large terminal output (seq 1 50000)', async () => {
+    const t0 = performance.now();
+    const r = await run(s1, c1, 'seq 1 50000', 60000);
+    const ms = performance.now() - t0;
+    assert(/\n50000\r?\n/.test(r.text), 'tail missing');
+    timings.seq50kTerminalMs = Math.round(ms);
+    return `${Math.round(ms)} ms for ${r.text.length} chars`;
+  });
+
+  await test('session with cmd/env + exit code + onExit', async () => {
+    const s = await vm.openSession({ cmd: 'echo "CMD $FOO $(pwd)"; exit 7', env: { FOO: 'bar' }, cwd: '~/repo' });
+    const c = collect(s);
+    const code = await within(new Promise((r) => s.onExit(r)), 20000, 'exit');
+    assert(code === 7, 'exit code ' + code);
+    assert(/CMD bar \/home\/user\/repo/.test(c.text), JSON.stringify(c.text));
+    const s3 = await vm.openSession({ cmd: ['printf', '%s|', 'a b', "it's"] });
+    const c3 = collect(s3);
+    assert(await within(new Promise((r) => s3.onExit(r)), 20000, 'exit') === 0);
+    assert(c3.text.includes("a b|it's|"), JSON.stringify(c3.text));
+    const s4 = await vm.openSession({ cwd: '~/does-not-exist' });
+    const c4 = collect(s4);
+    const r = await run(s4, c4, 'pwd');
+    assert(/\/home\/user\r?\n/.test(r.text) && /no such directory/.test(c4.text), 'cwd fallback');
+    s4.close();
+    return 'ok';
+  });
+
+  await test('exit and close', async () => {
+    const code1 = new Promise((r) => s2.onExit(r));
+    s2.write('exit 5\r');
+    assert(await within(code1, 10000, 'exit 5') === 5, 'exit 5');
+    // close() kills the whole session, including a background job.
+    const s = await vm.openSession();
+    const c = collect(s);
+    await run(s, c, 'sleep 100 & echo started');
+    const pid = s.pid;
+    const t0 = performance.now();
+    const closed = new Promise((r) => s.onExit(r));
+    s.close();
+    const code = await within(closed, 5000, 'close');
+    const left = (await vm.exec(`for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = sleep ] && echo $p; done; true`)).output.trim();
+    assert(!left, 'leftover sleep: ' + left);
+    return `close → onExit(${code}) in ${Math.round(performance.now() - t0)} ms (pid ${pid})`;
+  });
+
+  await test('session.write of a large paste', async () => {
+    const line = 'x'.repeat(100);
+    const body = Array.from({ length: 300 }, (_, i) => `${i}:${line}`).join('\n') + '\n';
+    const r = await vm.exec('true');
+    const from = c1.mark();
+    s1.write("cat > ~/t1/paste.txt << 'EOF'\r");
+    s1.write(body.replace(/\n/g, '\r'));
+    s1.write('EOF\r');
+    await run(s1, c1, 'true', 60000);
+    const got = await vm.readText('~/t1/paste.txt');
+    assert(got === body, `paste mismatch: ${got.length} vs ${body.length}`);
+    return `${body.length} bytes`;
+  });
+}
+
+async function persistSuite(phase) {
+  const cacheId = params.get('cache');
+  const persist = phase !== 'persist3';
+  await test(`${phase}: boot (persist=${persist})`, async () => {
+    await boot({ persist, cacheId, setup: 'echo run >> ~/setup-count\n' });
+    return { timeToReadyMs: timings.timeToReadyMs };
+  });
+  if (!vm || !vm.isReady) return;
+  await test(`${phase}: state`, async () => {
+    const count = (await vm.readText('~/setup-count')).split('\n').filter(Boolean).length;
+    const probe = await vm.stat('~/persist-probe');
+    if (phase === 'persist1') {
+      assert(count === 1 && !probe, `count ${count}, probe ${!!probe}`);
+      await vm.writeFile('~/persist-probe', 'kept');
+    } else if (phase === 'persist2') {
+      assert(probe && count === 1, `persisted VM: probe ${!!probe}, setup ran ${count}x (want 1)`);
+    } else {
+      assert(!probe && count === 1, `fresh VM: probe ${!!probe} (want none), setup ran ${count}x (want 1)`);
+    }
+    return { setupRuns: count, probe: !!probe };
+  });
+}
+
+try {
+  if (suite === 'main') await mainSuite();
+  else if (suite === 'boot') await test('boot only (window.vm for manual testing)', () => boot({}));
+  else await persistSuite(suite);
+} catch (e) {
+  print('suite crashed: ' + (e.stack || e), 'bad');
+  results.push({ name: 'suite', ok: false, error: String(e) });
+}
+const failed = results.filter((r) => !r.ok).length;
+print(`\n${results.length - failed}/${results.length} passed`, failed ? 'bad' : 'ok');
+print('timings ' + JSON.stringify(timings));
+window.__done = true;
+</script>
+</body>
+</html>

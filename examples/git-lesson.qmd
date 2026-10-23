@@ -155,7 +155,9 @@ Source Control view in VS Code is empty again: nothing has changed since the com
 Our pancakes need more sugar. Edit `pancakes.md` in **VS Code** — change `1 tbsp sugar`
 to `2 tbsp sugar` and save with <kbd>Ctrl</kbd>+<kbd>S</kbd> — or let `sed` do it:
 
-`sed -i 's/1 tbsp sugar/2 tbsp sugar/' pancakes.md`{.os-run target="git"}
+```{.bash .os-run target="git"}
+sed -i 's/1 tbsp sugar/2 tbsp sugar/' pancakes.md
+```
 
 Now ask git what changed:
 
@@ -258,17 +260,17 @@ You used `init`, `status`, `add`, `commit`, `log`, `diff`, `branch`, `checkout` 
 ::::: {.lesson-workspace}
 
 :::: {.ws-wide}
-::: {#code .os-window app="vscode" title="project — VS Code" folder="~/project" open="pancakes.md" height="42vh"}
+::: {#code .os-window app="vscode" title="project — VS Code" folder="~/project" open="pancakes.md" height="41vh"}
 :::
 ::::
 
 :::: {.ws-cell}
-::: {#files .os-window app="explorer" title="project" path="~/project" height="40vh"}
+::: {#files .os-window app="explorer" title="project" path="~/project" height="38vh"}
 :::
 ::::
 
 :::: {.ws-cell}
-::: {#git .os-window app="terminal" title="bash — ~/project" cwd="~/project" height="40vh" theme="dark"}
+::: {#git .os-window app="terminal" title="bash — ~/project" cwd="~/project" height="38vh" theme="dark"}
 :::
 ::::
 

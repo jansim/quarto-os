@@ -328,3 +328,44 @@
   margin-top: 0;
   margin-bottom: 0;
 }
+
+/* ---------------------------------------------- dark windows: code colors */
+/* Fallback palette for syntax highlighting inside theme="dark" windows (the
+   site's highlight style is a light one). Wrapped in :where() so that any
+   rule shipped by the extension itself takes precedence. */
+:where(.qos-window.qos-dark) div.sourceCode code,
+:where(.qos-window.qos-dark) div.sourceCode code span:not([class]),
+:where(.qos-window.qos-dark) pre code { color: #e6edf3; }
+:where(.qos-window.qos-dark) div.sourceCode code span.kw,
+:where(.qos-window.qos-dark) div.sourceCode code span.cf,
+:where(.qos-window.qos-dark) div.sourceCode code span.op,
+:where(.qos-window.qos-dark) div.sourceCode code span.ot,
+:where(.qos-window.qos-dark) div.sourceCode code span.im,
+:where(.qos-window.qos-dark) div.sourceCode code span.pp { color: #ff7b72; }
+:where(.qos-window.qos-dark) div.sourceCode code span.dt,
+:where(.qos-window.qos-dark) div.sourceCode code span.bu,
+:where(.qos-window.qos-dark) div.sourceCode code span.va { color: #ffa657; }
+:where(.qos-window.qos-dark) div.sourceCode code span.dv,
+:where(.qos-window.qos-dark) div.sourceCode code span.bn,
+:where(.qos-window.qos-dark) div.sourceCode code span.fl,
+:where(.qos-window.qos-dark) div.sourceCode code span.cn,
+:where(.qos-window.qos-dark) div.sourceCode code span.sc,
+:where(.qos-window.qos-dark) div.sourceCode code span.at { color: #79c0ff; }
+:where(.qos-window.qos-dark) div.sourceCode code span.st,
+:where(.qos-window.qos-dark) div.sourceCode code span.ch,
+:where(.qos-window.qos-dark) div.sourceCode code span.ss,
+:where(.qos-window.qos-dark) div.sourceCode code span.vs { color: #a5d6ff; }
+:where(.qos-window.qos-dark) div.sourceCode code span.fu,
+:where(.qos-window.qos-dark) div.sourceCode code span.ex { color: #d2a8ff; }
+:where(.qos-window.qos-dark) div.sourceCode code span.co,
+:where(.qos-window.qos-dark) div.sourceCode code span.do,
+:where(.qos-window.qos-dark) div.sourceCode code span.an,
+:where(.qos-window.qos-dark) div.sourceCode code span.cv,
+:where(.qos-window.qos-dark) div.sourceCode code span.in { color: #8b949e; }
+:where(.qos-window.qos-dark) div.sourceCode code span.al,
+:where(.qos-window.qos-dark) div.sourceCode code span.er { color: #f85149; }
+:where(.qos-window.qos-dark) div.sourceCode code span.wa { color: #d29922; }
+:where(.qos-window.qos-dark) .qos-prose code:not(.sourceCode) {
+  color: #ffb3c7;
+  background: rgba(255, 255, 255, .1);
+}

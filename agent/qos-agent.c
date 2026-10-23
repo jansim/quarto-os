@@ -174,7 +174,6 @@ static size_t b64_dec(unsigned char *dst, const char *s, size_t n) {
 
 static buf_t out;
 
-static void out_str(const char *s) { buf_add(&out, s, strlen(s)); }
 static void out_num(long v) {
   char t[24];
   int n = snprintf(t, sizeof t, " %ld", v);

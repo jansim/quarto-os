@@ -77,13 +77,14 @@ Win.n = 0; Win.z = 10;
 let vmP = null;
 const loaded = new Map();
 const QuartoOS = window.QuartoOS = {
-  config: { theme: params.get('theme') || 'light', vm: { bootMs: params.has('boot') ? +params.get('boot') : 1800, fail: params.has('fail') }, cdn: {} },
+  config: { theme: params.get('theme') || 'light', vm: { bootMs: params.has('boot') ? +params.get('boot') : 1800, fail: params.has('fail'), noIdent: params.has('noident') }, cdn: {} },
   baseUrl,
   apps: APPS,
   windows: [],
   lastTerminal: null,
   async open(app, opts = {}) {
-    const container = (opts.target && document.getElementById(opts.target)) || document.getElementById('desk') || document.body;
+    const origin = opts.origin; delete opts.origin;
+    const container = (opts.target && document.getElementById(opts.target)) || (origin && origin.parentElement) || document.getElementById('desk') || document.body;
     const win = new Win(app, opts, container);
     QuartoOS.windows.push(win);
     win.focus();
