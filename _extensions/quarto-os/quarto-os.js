@@ -95,12 +95,15 @@ class Win {
     if (!this.floating) {
       s.width = px(o.width) || (this.app === 'content' ? '' : '100%');
       s.height = px(o.height) || (this.app === 'content' ? '' : sz[1] + 'px');
+      // centre windows with a width, but fill grid / flex cells
+      if (o.width) el.classList.add('qos-sized');
+      if (/grid|flex/.test(getComputedStyle(el.parentNode).display)) el.classList.add('qos-cell');
       return;
     }
     if (el.parentNode !== host.el) host.el.appendChild(el);
     const box = this.box(), t = host.type;
     s.width = px(o.width) || Math.min(sz[0], Math.max(240, box.w - 24)) + 'px';
-    s.height = px(o.height) || (this.app === 'content' && t === 'anchor' ? '' : Math.min(sz[1], Math.max(140, box.h - 60)) + 'px');
+    s.height = px(o.height) || (this.app === 'content' ? '' : Math.min(sz[1], Math.max(140, box.h - 60)) + 'px');
     let x = o.x, y = o.y;
     if (x == null || y == null) {
       // cascade from the front-most window of this host (like macOS)
@@ -120,6 +123,19 @@ class Win {
     }
     s.left = px(x); s.top = px(y);
     s.zIndex = ++zTop;
+    this.fit();
+  }
+
+  // keep a floating window inside its desktop / slide / overlay (shrinking it if needed);
+  // remembers the wanted geometry so it grows back when the container gets bigger
+  fit() {
+    const el = this.el, s = el.style, b = this.box();
+    if (!this.floating || this.host.type === 'anchor' || this.state === 'maximized' || this.fs || !el.offsetWidth || !this.host.el.clientWidth) return;
+    const k = this.want || (this.want = { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight, sw: s.width, sh: s.height });
+    s.width = k.w > b.w ? b.w + 'px' : k.sw;
+    s.height = k.h > b.h ? b.h + 'px' : k.sh;
+    s.left = clamp(k.x, 0, Math.max(0, b.w - el.offsetWidth)) + 'px';
+    s.top = clamp(k.y, 0, Math.max(0, b.h - el.offsetHeight)) + 'px';
   }
 
   box() {
@@ -172,7 +188,7 @@ class Win {
     try { t.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     k.add('qos-busy');
     const mv = ev => move((ev.clientX - x0) / s, (ev.clientY - y0) / s);
-    const up = () => { ['pointermove', 'pointerup', 'pointercancel'].forEach((n, i) => t.removeEventListener(n, i ? up : mv)); k.remove('qos-busy'); };
+    const up = () => { ['pointermove', 'pointerup', 'pointercancel'].forEach((n, i) => t.removeEventListener(n, i ? up : mv)); k.remove('qos-busy'); this.want = null; };
     t.addEventListener('pointermove', mv); t.addEventListener('pointerup', up); t.addEventListener('pointercancel', up);
   }
 
@@ -464,7 +480,8 @@ class Desktop {
     el.classList.add('qos-ready');
     el.style.height = px(o.height || '480px');
     if (o.width) el.style.width = px(o.width);
-    if (o.wallpaper) el.style.setProperty('--qos-wallpaper', /gradient\(|^#|^rgb|^hsl|^var\(/.test(o.wallpaper) ? o.wallpaper : 'url("' + o.wallpaper + '") center / cover no-repeat');
+    // a gradient / colour, or an image path (relative to the page, not to quarto-os.css)
+    if (o.wallpaper) el.style.setProperty('--qos-wallpaper', /gradient\(|^#|^rgb|^hsl|^var\(/.test(o.wallpaper) ? o.wallpaper : 'url("' + new URL(o.wallpaper, D.baseURI).href + '") center / cover no-repeat');
     if ((o.theme || config.theme) === 'dark') el.classList.add('qos-desk-dark');
     const kids = Array.from(el.children), extra = h('div', 'qos-desk-content');
     const screen = h('div', 'qos-screen');
@@ -478,6 +495,7 @@ class Desktop {
     } else el.classList.add('qos-nomenubar');
     el.appendChild(screen);
     this.host = { type: 'desktop', el: screen, desk: this };
+    if (W.ResizeObserver) new ResizeObserver(() => this.wins().forEach(w => w.fit())).observe(screen);
     this.dock();
     kids.forEach(k => { if (k.classList.contains('qos-window')) new Win(k, opt(k), this.host); });
     desktops.push(this);
@@ -764,6 +782,7 @@ function init() {
     R.on('slidechanged', () => windows.forEach(w => { if (w.fs && !w.isVisible()) w.exitFS(); }));
   }
   W.addEventListener('load', refresh);
+  W.addEventListener('resize', () => windows.forEach(w => { if (w.host.type === 'overlay') w.fit(); }));
   if (config.vm && config.vm.autoboot) vm().catch(err => console.error('[quarto-os] VM', err));
   D.dispatchEvent(new CustomEvent('quarto-os:ready', { detail: QOS }));
 }

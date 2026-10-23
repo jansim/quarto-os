@@ -195,8 +195,8 @@ if (REAL) {
   const page = await newPage('apps-test.html?vm=real');
   await page.evaluate(() => QuartoOS.open('terminal', { cwd: '~', run: 'echo REAL-$((6*7))', x: 10, y: 10, width: 640, height: 360 }));
   await page.evaluate(async () => (await QuartoOS.vm()).ready);
-  await page.waitForTimeout(4000);
-  ok((await page.textContent('.qos-term .xterm-rows')).includes('REAL-42'), 'real VM: terminal runs a command');
+  const ran = await page.waitForFunction(() => document.querySelector('.qos-term .xterm-rows').textContent.includes('REAL-42'), null, { timeout: 15000 }).then(() => true, () => false);
+  ok(ran, 'real VM: terminal runs a command');
   await vmEval(page, vm => vm.exec('mkdir -p ~/e2e && cd ~/e2e && (test -d .git || git init -q) && echo hi > a.txt'));
   await page.evaluate(() => QuartoOS.open('explorer', { path: '~/e2e', x: 660, y: 10, width: 600, height: 360 }));
   await page.evaluate(() => QuartoOS.open('vscode', { folder: '~/e2e', open: 'a.txt', x: 10, y: 380, width: 900, height: 400 }));

@@ -27,6 +27,29 @@ local function is_html()
   return quarto.doc.is_format("html:js")
 end
 
+local SLIDE_FORMATS = { revealjs = true, slidy = true, s5 = true, dzslides = true, slideous = true }
+
+-- Pandoc's section handling turns a div that *starts* with a heading into a
+-- <section>, and in slide formats every heading at slide level (even nested in
+-- a div) becomes a slide. So window/desktop content starts with a no-op raw
+-- block, and in slide formats headings inside windows are emitted as raw <hN>.
+local function guard_content(blocks)
+  blocks = pandoc.Blocks(blocks)
+  if SLIDE_FORMATS[FORMAT] then
+    blocks = blocks:walk({
+      Header = function(hd)
+        local attrs = ""
+        if hd.identifier ~= "" then attrs = attrs .. ' id="' .. hd.identifier .. '"' end
+        if #hd.classes > 0 then attrs = attrs .. ' class="' .. table.concat(hd.classes, " ") .. '"' end
+        local tag = "h" .. hd.level
+        return { pandoc.RawBlock("html", "<" .. tag .. attrs .. ">"), pandoc.Plain(hd.content), pandoc.RawBlock("html", "</" .. tag .. ">") }
+      end,
+    })
+  end
+  blocks:insert(1, pandoc.RawBlock("html", "<!-- -->"))
+  return blocks
+end
+
 ---------------------------------------------------------------- JSON
 
 local function jstr(s)
@@ -320,14 +343,14 @@ local function Div(el)
     -- content goes into an inner .qos-body div (also stops pandoc from turning
     -- a div that starts with a heading into a <section>)
     local content = {}
-    if opts.app == "content" then content = { pandoc.Div(el.content, pandoc.Attr("", { "qos-body" })) } end
+    if opts.app == "content" then content = { pandoc.Div(guard_content(el.content), pandoc.Attr("", { "qos-body" })) } end
     return os_element("window", opts, el.identifier, other_classes(cls, "os-window", "qos-window"), content)
   elseif cls:includes("os-desktop") then
     if not is_html() then return el.content end
     local opts = attr_table(el.attributes)
     note_dock(opts.dock)
     ensure_dep()
-    return os_element("desktop", opts, el.identifier, other_classes(cls, "os-desktop", "qos-desktop"), el.content)
+    return os_element("desktop", opts, el.identifier, other_classes(cls, "os-desktop", "qos-desktop"), guard_content(el.content))
   end
   -- windows produced by the shortcode
   if cls:includes("qos-window") and el.attributes["data-qos-opts"] then

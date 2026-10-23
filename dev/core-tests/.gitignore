@@ -10,3 +10,6 @@ site/.quarto/
 !wall.html
 coi-serviceworker.js
 shots/
+
+/.quarto/
+**/*.quarto_ipynb
