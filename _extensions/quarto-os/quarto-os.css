@@ -91,8 +91,8 @@
 
 /* prose: padded */
 .qos-body.qos-prose { padding: .9em 1.15em; }
-.qos-body.qos-prose > :first-child { margin-top: 0; }
-.qos-body.qos-prose > :last-child { margin-bottom: 0; }
+.qos-body.qos-prose > :first-child, .qos-body.qos-prose > section:first-child > :first-child { margin-top: 0; }
+.qos-body.qos-prose > :last-child, .qos-body.qos-prose > section:last-child > :last-child { margin-bottom: 0; }
 
 /* dark windows: Bootstrap variables, prose, inline code and a dark syntax palette (overrides Quarto's light one) */
 .qos-window.qos-dark {
@@ -274,6 +274,7 @@ code.qos-run.qos-flash, .qos-run-wrap.qos-flash pre { animation: qos-flash .5s; 
 .qos-screen { position: absolute; top: var(--qos-menubar-h); right: 0; bottom: 0; left: 0; z-index: 1; }
 .qos-nomenubar .qos-screen { top: 0; }
 .qos-desk-content { position: absolute; inset: 0; padding: 14px 18px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.35); }
+.qos-desk-content :is(h1, h2, h3, h4, h5, h6, p, a) { color: inherit; }
 .qos-screen > .qos-window.qos-max { top: 0 !important; left: 0 !important; width: 100% !important; height: calc(100% - var(--qos-dock-space)) !important; border-radius: 0 0 var(--qos-radius) var(--qos-radius); }
 .qos-screen > .qos-max > .qos-titlebar { border-radius: 0; }
 .qos-nodock .qos-screen > .qos-window.qos-max { height: 100% !important; }

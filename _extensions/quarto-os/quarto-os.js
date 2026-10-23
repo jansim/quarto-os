@@ -106,7 +106,7 @@ class Win {
     s.height = px(o.height) || (this.app === 'content' ? '' : Math.min(sz[1], Math.max(140, box.h - 60)) + 'px');
     let x = o.x, y = o.y;
     if (x == null || y == null) {
-      // cascade from the front-most window of this host (like macOS)
+      // cascade from the front-most window (like macOS)
       const ww = el.offsetWidth, wh = el.offsetHeight;
       const prev = windows.filter(v => v.floating && v.host.el === host.el && v.state === 'normal').sort((a, b) => b.el.style.zIndex - a.el.style.zIndex)[0];
       let cx = 0, cy = 0;
@@ -126,8 +126,7 @@ class Win {
     this.fit();
   }
 
-  // keep a floating window inside its desktop / slide / overlay (shrinking it if needed);
-  // remembers the wanted geometry so it grows back when the container gets bigger
+  // keep floating windows inside their container (shrink if needed; grow back later)
   fit() {
     const el = this.el, s = el.style, b = this.box();
     if (!this.floating || this.host.type === 'anchor' || this.state === 'maximized' || this.fs || !el.offsetWidth || !this.host.el.clientWidth) return;
@@ -160,8 +159,8 @@ class Win {
     bar.addEventListener('dblclick', e => { if (!e.target.closest('.qos-light')) this.maximize(); });
     bar.addEventListener('pointerdown', e => this.drag(e));
     el.addEventListener('pointerdown', () => this.focus(true), true);
-    // keep typing / scrolling inside windows away from reveal.js and page shortcuts
-    ['keydown', 'keyup', 'keypress', 'wheel', 'touchstart', 'touchmove'].forEach(t => el.addEventListener(t, e => e.stopPropagation(), { passive: true }));
+    // keep keys / wheel away from reveal.js and page shortcuts
+    'keydown keyup wheel touchstart touchmove'.split(' ').forEach(t => el.addEventListener(t, e => e.stopPropagation(), { passive: true }));
     (this.floating ? ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] : ['grip']).forEach(d => {
       const g = h('div', 'qos-rs qos-rs-' + d);
       g.addEventListener('pointerdown', e => this.resize(e, d === 'grip' ? 'se' : d));
@@ -171,7 +170,7 @@ class Win {
     if (io && !this.near) io.observe(el); else this.near = true;
   }
 
-  // mount when first visible (and near the viewport), emit 'resize' when visible
+  // mount when first visible near the viewport; emit 'resize' while visible
   kick() {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => {
@@ -230,7 +229,7 @@ class Win {
     return !(s && !s.classList.contains('present')) && !!this.body.offsetParent;
   }
 
-  // bring to front; the front window of each container looks active, the others inactive
+  // front window of each container looks active
   front() {
     if (!this.floating) return;
     if (!this.fs) this.el.style.zIndex = ++zTop;
@@ -253,7 +252,7 @@ class Win {
     if (!user && this.instance && this.instance.focus) { try { this.instance.focus(); } catch (e) { /* ignore */ } }
   }
 
-  // after this window goes away, activate the most recent remaining one of its container
+  // activate the most recent remaining window of this container
   next() {
     if (focused === this) { focused = null; this.el.classList.remove('qos-focused'); this.emit('blur'); }
     const n = this.floating && recent(windows.filter(w => w !== this && w.host.el === this.host.el && w.state !== 'minimized' && w.state !== 'closed'));
@@ -261,11 +260,9 @@ class Win {
     if (this.desk) this.desk.update();
   }
 
-  // minimize "genie" animation between the window and its dock tile
   genie(tile, back) {
     const a = this.el.getBoundingClientRect(), b = tile.getBoundingClientRect();
-    const far = { transform: `translate(${b.left + b.width / 2 - a.left - a.width / 2}px,${b.top + b.height / 2 - a.top - a.height / 2}px) scale(.08)`, opacity: 0.2 };
-    const near = { transform: 'none', opacity: 1 };
+    const far = { transform: `translate(${b.left + b.width / 2 - a.left - a.width / 2}px,${b.top + b.height / 2 - a.top - a.height / 2}px) scale(.08)`, opacity: 0.2 }, near = { transform: 'none' };
     return anim(this.el, back ? [far, near] : [near, far], 250);
   }
 
@@ -273,7 +270,7 @@ class Win {
     if (this.state === 'closed') return;
     if (this.fs) this.exitFS();
     if (!this.desk) {
-      // inline & floating windows outside desktops collapse to their title bar
+      // outside desktops: collapse to the title bar
       this.state = this.el.classList.toggle('qos-collapsed') ? 'collapsed' : 'normal';
       return this.kick();
     }
@@ -301,7 +298,7 @@ class Win {
     this.kick();
   }
 
-  // green button: desktop → fill the desktop; elsewhere → fullscreen overlay (toggles)
+  // green button: fill the desktop, else fullscreen (toggles)
   maximize() {
     if (this.state === 'closed') return;
     if (this.state === 'minimized' || this.state === 'collapsed') this.restore();
@@ -353,7 +350,7 @@ class Win {
     this.next();
     this.state = 'closed';
     if (!this.floating) {
-      // inline windows leave a small bar behind so the document keeps its content
+      // inline: leave a "closed" bar so the document keeps its content
       if (this.app !== 'content') { this.dispose(); this.mounted = false; this.body.replaceChildren(); }
       const bar = this.closedBar = h('div', 'qos-closedbar');
       const b = btn('qos-reopen', 'Reopen');
@@ -382,7 +379,6 @@ class Win {
     this.kick();
   }
 
-  // lazy-load the app module; placeholder while loading, readable error if it fails
   mount() {
     if (this.mounted) return this.ready;
     this.mounted = true;
@@ -453,7 +449,6 @@ function mountBrowser(win, opts) {
   frame.setAttribute('credentialless', ''); // lets cross-origin pages load on cross-origin isolated pages (Chromium)
   frame.setAttribute('allow', 'fullscreen; clipboard-write');
   b.append(bar, frame);
-  // (in-frame navigation of cross-origin pages can't be observed, so no back/forward buttons)
   const go = u => {
     u = String(u || '').trim() || 'about:blank';
     if (!/^[a-z][\w+.-]*:|^[/.]/i.test(u)) u = 'https://' + u;
@@ -469,8 +464,8 @@ function mountBrowser(win, opts) {
 
 // == desktop
 const LOGO = '<svg viewBox="0 0 16 16"><path d="M8 1.2c.5 3.4 2.4 5.3 5.8 5.8-3.4.5-5.3 2.4-5.8 5.8-.5-3.4-2.4-5.3-5.8-5.8C5.6 6.5 7.5 4.6 8 1.2z"/><circle cx="13" cy="13" r="1.6"/></svg>';
-const STATUS = '<svg viewBox="0 0 20 14"><path d="M10 12.6l2.3-2.6a3.4 3.4 0 0 0-4.6 0zM5.4 7.9l1.3 1.4a4.8 4.8 0 0 1 6.6 0l1.3-1.4a6.7 6.7 0 0 0-9.2 0zM2.6 5l1.3 1.4a8.8 8.8 0 0 1 12.2 0L17.4 5a10.7 10.7 0 0 0-14.8 0z"/></svg>' +
-  '<svg viewBox="0 0 26 14"><rect x=".75" y="1.75" width="21.5" height="10.5" rx="3" fill="none" stroke="currentColor" stroke-opacity=".55" stroke-width="1.2"/><rect x="2.4" y="3.4" width="15" height="7.2" rx="1.6"/><path d="M23.5 5.2v3.6c.8-.3 1.3-1 1.3-1.8s-.5-1.5-1.3-1.8z" fill-opacity=".55"/></svg>';
+const STATUS = '<svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M2.6 5.4a10.5 10.5 0 0 1 14.8 0M5.6 8.4a6.2 6.2 0 0 1 8.8 0"/><circle cx="10" cy="11.6" r="1.5" fill="currentColor" stroke="none"/></svg>' +
+  '<svg viewBox="0 0 26 14"><rect x=".7" y="1.7" width="21.6" height="10.6" rx="3" fill="none" stroke="currentColor" stroke-opacity=".55"/><rect x="2.4" y="3.4" width="15" height="7.2" rx="1.6"/><path d="M23.6 5.2v3.6a2 2 0 0 0 0-3.6z" opacity=".55"/></svg>';
 
 class Desktop {
   constructor(el) {
@@ -480,7 +475,7 @@ class Desktop {
     el.classList.add('qos-ready');
     el.style.height = px(o.height || '480px');
     if (o.width) el.style.width = px(o.width);
-    // a gradient / colour, or an image path (relative to the page, not to quarto-os.css)
+    // image paths are relative to the page
     if (o.wallpaper) el.style.setProperty('--qos-wallpaper', /gradient\(|^#|^rgb|^hsl|^var\(/.test(o.wallpaper) ? o.wallpaper : 'url("' + new URL(o.wallpaper, D.baseURI).href + '") center / cover no-repeat');
     if ((o.theme || config.theme) === 'dark') el.classList.add('qos-desk-dark');
     const kids = Array.from(el.children), extra = h('div', 'qos-desk-content');
@@ -550,7 +545,6 @@ class Desktop {
       t.append(icon(win.app), h('span', 'qos-tip', esc(win.title || win.def.title)));
       t.addEventListener('click', () => win.restore());
       this.minBox.appendChild(t);
-      anim(t, [{ transform: 'scale(.3)', opacity: 0 }, { transform: 'none', opacity: 1 }], 220);
     } else if (!add && t) t.remove();
     this.update();
     return t;
@@ -576,7 +570,7 @@ function hostFor(target, origin) {
   if (target instanceof Win) { origin = target.el; target = null; }
   if (typeof target === 'string' && target) {
     const t = D.getElementById(target.replace(/^#/, ''));
-    if (!t) warn('target not found: ' + target);
+    if (!t) warn('no element #' + target);
     target = t;
   }
   if (target && target.nodeType === 1) {
@@ -626,7 +620,7 @@ function run(text, target, origin) {
     else warn('run target not found: ' + target);
   }
   if (!win && !host) {
-    // most recently focused terminal (in a slide: one in that slide), else the page's only terminal
+    // last focused terminal (in a slide: of that slide), else the only one
     const terms = windows.filter(w => w.app === 'terminal' && w.state !== 'closed');
     const s = slideOf(origin), lt = alive(QOS.lastTerminal) ? QOS.lastTerminal : recent(terms);
     if (s) { const here = terms.filter(w => slideOf(w.el) === s); win = here.includes(lt) ? lt : here[here.length - 1]; }
@@ -671,7 +665,7 @@ function load(url, make) {
     D.head.appendChild(e);
   }));
 }
-// classic script; window.define is hidden while it loads so UMD bundles don't register with Monaco's AMD loader
+// hides window.define while loading (UMD vs Monaco's AMD loader)
 const loadScript = url => load(url, u => {
   const s = D.createElement('script');
   s.src = u; s.async = true;
@@ -715,7 +709,7 @@ function coi() {
 }
 
 // == init
-// does anything on the page need the VM? (the Lua filter can't see shortcodes, so check the DOM)
+// the Lua filter can't see shortcodes, so check the DOM for VM apps too
 function pageUsesVM() {
   const vmApp = a => !!(apps[a] && apps[a].vm);
   return !!D.querySelector('.qos-run') ||
@@ -732,7 +726,7 @@ function initWindow(el) {
     const s = slideOf(el);
     if (s) host = { type: 'slide', el: s };
     else {
-      // floating over the document, positioned relative to where it was written
+      // floats over the document near where it was written
       const a = h('div', 'qos-anchor');
       el.before(a);
       host = { type: 'anchor', el: a };
@@ -757,7 +751,7 @@ function init() {
   $$('.qos-desktop').forEach(el => new Desktop(el));
   $$('.qos-window').forEach(initWindow);
   $$('.qos-run').forEach(setupRun);
-  $$('.qos-launch').forEach(l => l.style.setProperty('--qos-launch-icon', 'url("' + svgUrl((apps[opt(l).app] || apps.terminal).icon) + '")'));
+  $$('.qos-launch').forEach(l => l.style.setProperty('--qos-launch-icon', 'url("' + QOS.icon(opt(l).app || 'terminal') + '")'));
 
   D.addEventListener('click', e => {
     const l = e.target.closest('.qos-launch'), rb = e.target.closest('.qos-runbtn'), rc = e.target.closest('code.qos-run');
