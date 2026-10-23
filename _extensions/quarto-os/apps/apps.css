@@ -125,9 +125,19 @@
 .qa-root.qos-explorer .qx-seg .qx-tb-btn { width: 30px; height: 22px; }
 .qa-root.qos-explorer .qx-seg .qx-tb-btn.on { background: #fff; color: #1d1d1f; box-shadow: 0 0 0 .5px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.1); }
 .qa-root.qos-explorer.qos-dark .qx-seg .qx-tb-btn.on { background: #636366; color: #fff; }
-.qos-explorer .qx-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; white-space: nowrap; padding: 0 4px; margin-left: 2px; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 10px); mask-image: linear-gradient(90deg, transparent 0, #000 10px); }
-.qos-explorer .qx-crumbs::-webkit-scrollbar { display: none; }
-.qos-explorer .qx-crumb { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 5px; border-radius: 5px; color: var(--qx-sub); font-size: 12px; cursor: default; }
+.qos-explorer .qx-crumbs { flex: 1 1 0; min-width: 0; display: flex; align-items: center; overflow: hidden; white-space: nowrap; padding: 0 4px; margin-left: 2px; }
+.qos-explorer .qx-crumbs [hidden] { display: none; }
+.qos-explorer .qx-crumb { flex: none; display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 22px; padding: 0 5px; border-radius: 5px; color: var(--qx-sub); font-size: 12px; cursor: default; }
+.qos-explorer .qx-crumb.last { flex: 0 1 auto; }
+.qos-explorer .qx-crumbs.measuring .qx-crumb.last { flex: none; }
+.qos-explorer .qx-crumb-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.qos-explorer .qx-crumb-more { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; color: var(--qx-sub); }
+.qos-explorer .qx-crumb-more:hover { background: rgba(0,0,0,.06); }
+.qos-explorer.qos-dark .qx-crumb-more:hover { background: rgba(255,255,255,.08); }
+.qos-explorer .qx-crumb-more svg { width: 14px; height: 14px; }
+@container (max-width: 420px) { .qos-explorer .qx-toolbar .qx-seg { display: none; } }
+@container (max-width: 340px) { .qos-explorer .qx-toolbar .qx-tb-hidden { display: none; } .qos-explorer .qx-toolbar { padding-right: 4px; } }
+@container (max-width: 290px) { .qos-explorer .qx-toolbar .qx-tb-fwd { display: none; } }
 .qos-explorer .qx-crumb:hover { background: rgba(0,0,0,.06); color: inherit; }
 .qos-explorer.qos-dark .qx-crumb:hover { background: rgba(255,255,255,.08); }
 .qos-explorer .qx-crumb.last { color: inherit; font-weight: 600; }

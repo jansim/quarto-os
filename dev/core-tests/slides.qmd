@@ -1,0 +1,49 @@
+---
+title: "Quarto OS core test: slides"
+format: revealjs
+filters: [quarto-os]
+---
+
+## Inline window
+
+::: {.os-window title="hello.py" width="70%"}
+```python
+def hello(name):
+    print(f"hi {name}")
+```
+:::
+
+Some slide text under the window.
+
+## Terminal and runs
+
+::: {.os-window #st1 app="terminal" title="bash" height="300px"}
+:::
+
+Run `git status`{.os-run target="st1"} or `ls`{.os-run}.
+
+## Floating window
+
+::: {.os-window title="cat.jpg" x=560 y=120 width=360 height=260}
+![](cat.jpg)
+:::
+
+Text on the left of the slide; the window floats at x=560,y=120.
+
+[Launch terminal]{.os-launch app="terminal"}
+
+## Desktop
+
+::: {.os-desktop height="520px"}
+::: {.os-window app="terminal" x=30 y=30 width=480 height=260}
+:::
+:::
+
+## Launchers and run block
+
+[New terminal]{.os-launch app="terminal"} [Files]{.os-launch app="explorer"}
+
+```{.bash .os-run}
+git init
+git add .
+```

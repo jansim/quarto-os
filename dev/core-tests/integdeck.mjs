@@ -1,0 +1,26 @@
+import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page.on('pageerror', e => console.log('[pageerror]', e.message));
+page.on('console', m => { if (m.type() === 'error') console.log('[console]', m.text().slice(0, 200)); });
+await page.goto('http://localhost:8212/integ/deck.html#/terminal-slide', { waitUntil: 'load' });
+for (let i = 0; i < 20 && !(await page.evaluate(() => crossOriginIsolated).catch(() => false)); i++) await page.waitForTimeout(500);
+await page.waitForLoadState('load');
+await page.waitForTimeout(16000);
+await page.locator('#st .qos-body').click();
+await page.keyboard.type('echo typed-in-slide');
+await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowRight'); await page.keyboard.press('Space');
+await page.keyboard.press('Enter');
+await page.waitForTimeout(1500);
+console.log('slide after typing (expect 1):', await page.evaluate(() => Reveal.getIndices().h));
+console.log((await page.evaluate(() => document.querySelector('#st .xterm-rows').innerText)).split('\n').filter(Boolean).slice(-3).join('\n'));
+await page.screenshot({ path: 'shots/integ-deck.png' });
+// zoom to fullscreen and check the terminal refits to the viewport
+const cols0 = await page.evaluate(() => document.querySelector('#st .xterm-rows').children[0].textContent.length);
+await page.locator('#st .qos-max').click();
+await page.waitForTimeout(1200);
+await page.screenshot({ path: 'shots/integ-deck-fs.png' });
+await page.keyboard.press('Escape');
+await page.waitForTimeout(500);
+console.log('after Esc: fullscreen', await page.evaluate(() => document.getElementById('st').classList.contains('qos-fullscreen')), 'slide', await page.evaluate(() => Reveal.getIndices().h), 'overview', await page.evaluate(() => Reveal.isOverview()));
+await browser.close();

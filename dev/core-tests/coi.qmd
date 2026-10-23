@@ -1,0 +1,10 @@
+---
+title: "COI test"
+filters: [quarto-os]
+---
+
+{{< os terminal height="200px" >}}
+
+A cross-origin image without CORP headers (should still load with COEP credentialless):
+
+![](https://quarto.org/quarto.png){width=120}

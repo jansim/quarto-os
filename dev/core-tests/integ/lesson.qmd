@@ -1,0 +1,18 @@
+---
+title: "Integration: real apps + VM"
+filters: [quarto-os]
+quarto-os:
+  vm:
+    setup: |
+      mkdir -p ~/repo && cd ~/repo && git init -q && echo hello > README.md
+---
+
+::: {.os-window #t1 app="terminal" title="bash" height="260px" cwd="~/repo"}
+:::
+
+Run: `git status`{.os-run target="t1"}
+
+::: {.os-desktop #desk height="560px"}
+::: {.os-window app="explorer" x=20 y=20 width=520 height=320 path="~/repo"}
+:::
+:::

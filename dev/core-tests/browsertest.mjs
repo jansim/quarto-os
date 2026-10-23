@@ -1,0 +1,13 @@
+import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+await page.goto(process.argv[2], { waitUntil: 'load' });
+await page.waitForTimeout(800);
+await page.evaluate(() => QuartoOS.open('browser', { url: 'example.com' }));
+await page.waitForTimeout(4000);
+const w = page.locator('.qos-overlay .qos-window').last();
+await w.screenshot({ path: 'shots/browser-example.png' });
+console.log('frame src', await w.locator('iframe').getAttribute('src'), 'COI', await page.evaluate(() => crossOriginIsolated));
+const f = page.frames().find(f => f.url().includes('example.com'));
+console.log('frame title', f ? await f.title().catch(e => 'ERR ' + e.message) : 'no frame');
+await browser.close();

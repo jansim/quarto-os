@@ -46,13 +46,13 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   // ---------------------------------------------------------------- DOM
   const tbBtn = (icon, title, onclick, cls = '') => h('button.qx-tb-btn' + cls, { type: 'button', title, 'aria-label': title, onclick, html: ICONS[icon] });
   const bBack = tbBtn('back', 'Back', () => goHist(-1));
-  const bFwd = tbBtn('fwd', 'Forward', () => goHist(1));
+  const bFwd = tbBtn('fwd', 'Forward', () => goHist(1), '.qx-tb-fwd');
   const bUp = tbBtn('up', 'Enclosing folder', () => cwd && cwd !== '/' && go(dirname(cwd)));
   const bSide = tbBtn('sidebar', 'Show/hide sidebar', () => toggleSidebar());
   const crumbs = h('div.qx-crumbs');
   const bList = tbBtn('list', 'as List', () => setView('list'));
   const bIcons = tbBtn('grid', 'as Icons', () => setView('icons'));
-  const bHidden = tbBtn('eye', 'Show hidden files', () => { showHidden = !showHidden; render(); });
+  const bHidden = tbBtn('eye', 'Show hidden files', () => { showHidden = !showHidden; render(); }, '.qx-tb-hidden');
   const toolbar = h('div.qx-toolbar', null,
     bSide, h('div.qx-nav', null, bBack, bFwd), bUp, crumbs,
     h('div.qx-seg', { role: 'group' }, bList, bIcons), bHidden);
@@ -63,7 +63,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   root.append(sidebar, main);
 
   const offSize = onResize(root, w => {
-    crumbs.scrollLeft = crumbs.scrollWidth;
+    fitCrumbs();
     const narrow = w < 540;
     if (narrow !== root.classList.contains('qx-narrow')) {
       root.classList.toggle('qx-narrow', narrow);
@@ -233,18 +233,41 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
 
   function renderCrumbs() {
     const parts = cwd === '/' ? [] : cwd.split('/').filter(Boolean);
-    const segs = [h('span.qx-crumb', { 'data-path': '/', title: '/' }, h('span.qx-crumb-ic', { html: ICONS.computer }), h('span', { text: 'quarto-os' }))];
+    const more = h('span.qx-crumb-more', { title: 'Enclosing folders', html: ICONS.more, hidden: true });
+    const segs = [more, h('span.qx-crumb', { 'data-path': '/', title: '/' }, h('span.qx-crumb-ic', { html: ICONS.computer }), h('span.qx-crumb-label', { text: 'quarto-os' }))];
     let acc = '';
     for (const p of parts) {
       acc += '/' + p;
       segs.push(h('span.qx-crumb-sep', { html: ICONS.chevR }));
-      const isHome = acc === home;
-      segs.push(h('span.qx-crumb', { 'data-path': acc, title: acc }, isHome ? h('span.qx-crumb-ic', { html: ICONS.home }) : h('span.qx-crumb-ic', { html: FOLDER }), h('span', { text: p })));
+      segs.push(h('span.qx-crumb', { 'data-path': acc, title: acc }, h('span.qx-crumb-ic', { html: acc === home ? ICONS.home : FOLDER }), h('span.qx-crumb-label', { text: p })));
     }
     crumbs.replaceChildren(...segs);
     crumbs.lastChild.classList.add('last');
-    crumbs.scrollLeft = crumbs.scrollWidth;
+    fitCrumbs();
   }
+  // Narrow toolbar: hide leading ancestors behind "…" first, then let the current folder's name ellipsize.
+  function fitCrumbs() {
+    const kids = [...crumbs.children];
+    if (!kids.length) return;
+    const more = kids[0];
+    for (const k of kids) k.hidden = false;
+    more.hidden = true;
+    crumbs.classList.add('measuring');
+    const segs = kids.filter(k => k.classList.contains('qx-crumb'));
+    for (let i = 0; i < segs.length - 1 && crumbs.scrollWidth > crumbs.clientWidth + 1; i++) {
+      segs[i].hidden = true;
+      if (segs[i].nextSibling) segs[i].nextSibling.hidden = true;   // its separator
+      more.hidden = false;
+    }
+    crumbs.classList.remove('measuring');
+  }
+  crumbs.addEventListener('click', e => {
+    if (!e.target.closest('.qx-crumb-more')) return;
+    e.stopPropagation();
+    const hiddenSegs = [...crumbs.querySelectorAll('.qx-crumb[hidden]')];
+    const r = e.target.closest('.qx-crumb-more').getBoundingClientRect();
+    showMenu(r.left, r.bottom + 4, hiddenSegs.reverse().map(c => ({ label: c.textContent, action: () => go(c.dataset.path) })), { dark });
+  });
   crumbs.addEventListener('click', e => { const c = e.target.closest('.qx-crumb'); if (c && c.dataset.path !== cwd) go(c.dataset.path); });
 
   function setView(v) { view = v; render(); scrollToSel(); }

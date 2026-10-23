@@ -1,0 +1,18 @@
+---
+title: "Quarto OS core test: desktop"
+filters: [quarto-os]
+---
+
+A desktop with two windows:
+
+::: {.os-desktop #desk height="560px" title="Finder"}
+::: {.os-window app="terminal" #dt1 title="bash — repo" x=40 y=36 width=520 height=300 cwd="~/repo"}
+:::
+::: {.os-window title="cat.jpg" x=420 y=150 width=360 height=250}
+![](cat.jpg)
+:::
+:::
+
+Launchers (no target → the only desktop): [New terminal]{.os-launch app="terminal"} [Editor]{.os-launch app="vscode" open="README.md"} [Browser]{.os-launch app="browser" url="https://example.com"} and run `git log --oneline`{.os-run}.
+
+A second section with more text so that the page scrolls a bit.
