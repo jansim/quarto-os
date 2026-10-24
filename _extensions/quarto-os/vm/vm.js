@@ -1,9 +1,12 @@
 // Quarto OS — VM layer.
 //
-// One shared, headless CheerpX Linux per page. CheerpX exposes a single
-// console, so everything (any number of pty sessions, file access, exec) is
-// multiplexed over it by `qos-agent`, a tiny static i386 helper that runs
-// inside the VM (source and wire protocol: agent/qos-agent.c).
+// One shared, headless CheerpX Linux per page. CheerpX gives the page one
+// control console (tty1) plus six virtual terminals (tty2..tty7):
+//   - tty1 runs `qos-agent`, a tiny static i386 helper (agent/qos-agent.c)
+//     that serves file access and exec and starts/supervises sessions, over a
+//     line-oriented base64 protocol;
+//   - every terminal session gets its own VT, whose bytes flow directly
+//     between CheerpX and the Session (no agent hop, no encoding).
 //
 //   const vm = await createVM(QuartoOS.config.vm, { baseUrl: QuartoOS.baseUrl });
 //   vm.on('status', msg => …);  await vm.ready;
@@ -16,12 +19,19 @@ const CX_VERSION = '1.4.0';
 const DEFAULT_DISK = 'wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2';
 const HOME = '/home/user';
 const AGENT_ENV = ['HOME=' + HOME, 'USER=user', 'PATH=/usr/local/bin:/usr/bin:/bin'];
+const VT_FIRST = 2, VT_LAST = 7; // session terminals (tty1 is the agent's console)
 const LINE_RAW = 600;           // raw bytes per JS→agent line (800 base64 chars)
 const SEND_SLICE_MS = 8;        // max time spent in send() before yielding
 const BULK_WRITE = 64 * 1024;   // larger writes go through the DataDevice
 const ACTIVITY_DEBOUNCE = 300;  // 'activity' fires this long after the last output…
 const ACTIVITY_MAX_WAIT = 1000; // …but at least this often while output continues
 const WATCH_POLL_MS = 3000;     // baseline poll for vm.watch()
+const HOSTNAME = 'quarto-os';
+const PROMPT_MARK = '# quarto-os: hostname';
+// CheerpX has no hostname (sethostname is ENOSYS), so `\h` in Debian's PS1
+// would print nothing ("user@:~$"). Appended to ~/.bashrc once.
+const PROMPT_FIX = `\n${PROMPT_MARK} (the VM has none; show one in the prompt)\n` +
+  `case "$PS1" in *'\\h'*) PS1="\${PS1//\\\\h/${HOSTNAME}}";; esac\n`;
 
 // errno numbers of i386 Linux → names (Error#code).
 const ERRNO = {
@@ -115,48 +125,78 @@ function parseRecord(r) {
 }
 
 // ---------------------------------------------------------------------------
-// Session: one pty in the VM
+// Session: a shell on one of the VM's virtual terminals
 // ---------------------------------------------------------------------------
 
 class Session {
-  constructor(vm, id, cols, rows) {
+  constructor(vm, id, vt, cols, rows) {
     this.vm = vm;
     this.id = id;
+    this.vt = vt;            // /dev/tty<vt> inside the VM
     this.pid = 0;
     this.cols = cols;
     this.rows = rows;
     this.exited = false;
     this.exitCode = null;
+    // CheerpX VTs do not translate output "\n" into "\r\n" (no ONLCR); the
+    // session does it so any terminal emulator works unchanged.
+    this.convertEol = true;
     this._data = new Set();
     this._exit = new Set();
-    this._early = [];     // output that arrived before the first onData()
-    this._want = null;
+    this._early = [];        // output that arrived before the first onData()
+    this._prevCR = false;
+    this._hold = null;       // input queued while a Ctrl-C is being resolved
     this._rz = 0;
   }
 
-  /** Sends keyboard input (string or bytes) to the pty. */
+  /** Sends keyboard input (string or bytes). Also makes this session's size the VM's current one. */
   write(data) {
     if (this.exited) return;
     const u8 = toBytes(data);
-    for (let o = 0; o < u8.length; o += LINE_RAW) {
-      this.vm._line(`\x02I ${this.id} ${b64encode(u8, o, Math.min(o + LINE_RAW, u8.length))}`);
-    }
+    if (!u8.length) return;
+    if (this._hold) { this._hold.push(u8); return; }
+    this.vm._activate(this);
+    const ctrlC = u8.indexOf(3);
+    if (ctrlC < 0) { this._send(u8, 0, u8.length); return; }
+    // ^C: let the agent decide between SIGINT (non-canonical + ISIG, which
+    // CheerpX ignores) and passing the byte on; keep later input in order.
+    this._send(u8, 0, ctrlC);
+    this._hold = [u8.subarray(ctrlC + 1)];
+    this.vm._req('Y', [], null, { id: this.id, what: 'interrupt' }).then(
+      (r) => r.num === 1, () => false,
+    ).then((handled) => {
+      if (!handled && !this.exited) this.vm._send(3, this.vt);
+      const queued = this._hold;
+      this._hold = null;
+      for (const c of queued) this.write(c);
+    });
   }
 
-  /** Resizes the pty (coalesced: at most one resize per 30 ms reaches the VM). */
+  _send(u8, s, e) {
+    const send = this.vm._send, vt = this.vt;
+    for (let i = s; i < e; i++) send(u8[i], vt);
+  }
+
+  /** Sets the terminal size (coalesced, ≤ 1 update per 30 ms). */
   resize(cols, rows) {
-    this._want = [Math.max(1, cols | 0), Math.max(1, rows | 0)];
+    this.cols = Math.max(1, cols | 0);
+    this.rows = Math.max(1, rows | 0);
     if (this._rz) return;
     this._applySize();
     this._rz = setTimeout(() => { this._rz = 0; this._applySize(); }, 30);
   }
 
   _applySize() {
-    const [c, r] = this._want;
-    if (this.exited || (c === this.cols && r === this.rows)) return;
-    this.cols = c; this.rows = r;
-    this.vm._line(`\x02Z ${this.id} ${c} ${r}`);
+    // CheerpX VTs share one size; it follows the session in use (see activate).
+    if (!this.exited && (this.vm._active === this || !this.vm._active)) this.vm._activate(this);
   }
+
+  /**
+   * Makes this session's cols/rows the VM's terminal size (CheerpX VTs share
+   * a single size) and lets its foreground program know (SIGWINCH). Called
+   * automatically on write(); terminals may also call it on focus.
+   */
+  activate() { if (!this.exited) this.vm._activate(this); }
 
   /** cb(Uint8Array) for every chunk of output. Returns an unsubscribe function. */
   onData(cb) {
@@ -169,7 +209,7 @@ class Session {
     return () => this._data.delete(cb);
   }
 
-  /** cb(code) once the shell exits (code = exit status, 128+signal, -1 if the VM agent died). */
+  /** cb(code) once the shell exits (exit status, 128+signal, -1 if the VM agent died). */
   onExit(cb) {
     if (this.exited) queueMicrotask(() => cb(this.exitCode));
     else this._exit.add(cb);
@@ -179,12 +219,30 @@ class Session {
   /** Sends a signal (number, default SIGTERM) to every process of the session. */
   kill(sig = 15) { if (!this.exited) this.vm._line(`\x02K ${this.id} ${sig | 0}`); }
 
-  /** Hangs up the session; onExit fires when it is gone. */
+  /** Hangs up the session (SIGHUP, then SIGKILL); onExit fires when it is gone. */
   close() { if (!this.exited) this.vm._line(`\x02C ${this.id}`); }
 
-  _push(chunk) {
-    if (this._early) this._early.push(chunk);
-    else for (const cb of this._data) safe(cb, chunk);
+  _push(u8) {
+    let out = u8;
+    if (this.convertEol) {
+      let extra = 0, prev = this._prevCR;
+      for (let i = 0; i < u8.length; i++) { const b = u8[i]; if (b === 10 && !prev) extra++; prev = b === 13; }
+      if (extra) {
+        out = new Uint8Array(u8.length + extra);
+        let o = 0;
+        prev = this._prevCR;
+        for (let i = 0; i < u8.length; i++) {
+          const b = u8[i];
+          if (b === 10 && !prev) out[o++] = 13;
+          out[o++] = b;
+          prev = b === 13;
+        }
+      }
+      this._prevCR = u8[u8.length - 1] === 13;
+    }
+    if (out === u8) out = u8.slice(); // never hand out CheerpX's buffer
+    if (this._early) this._early.push(out);
+    else for (const cb of this._data) safe(cb, out);
   }
 
   _end(code) {
@@ -217,6 +275,7 @@ class VM {
     this.home = HOME;
     this.status = '';
     this.isReady = false;
+    this.maxSessions = VT_LAST - VT_FIRST + 1;
     this._agentUrl = baseUrl
       ? String(baseUrl).replace(/\/?$/, '/') + 'vm/qos-agent'
       : new URL('qos-agent', import.meta.url).href;
@@ -224,8 +283,11 @@ class VM {
     this._listeners = { status: new Set(), activity: new Set() };
     this._pending = new Map();   // request id → {resolve, reject, chunks, size, onData, what}
     this._sessions = new Map();  // session id → Session
+    this._vts = new Map();       // vt number → Session
+    this._active = null;         // session whose size the VTs currently have
+    this._size = [0, 0];
     this._nextId = 1;
-    this._q = [];                // outgoing lines (FIFO, keeps request order)
+    this._q = [];                // outgoing agent lines (FIFO, keeps request order)
     this._qh = 0;
     this._pumping = false;
     this._up = false;            // agent said hello and is accepting lines
@@ -240,6 +302,7 @@ class VM {
     this._bulkSeq = 0;
     this._bulkWrite = BULK_WRITE;
     this._firstSession = true;
+    this._consoleCb = (buf, vt) => this._onConsole(buf, vt);
 
     const mc = new MessageChannel();
     mc.port1.onmessage = () => { this._pumping = false; this._pump(); };
@@ -345,12 +408,16 @@ class VM {
         { type: 'sys', path: '/sys' },
       ],
     });
-    this._send = this._cx.setCustomConsole((buf, vt) => this._onConsole(buf, vt), 80, 24);
+    // A session opened before boot finished may already have picked a size.
+    const [cols, rows] = this._active ? [this._active.cols, this._active.rows] : [80, 24];
+    this._size = [cols, rows];
+    this._send = this._cx.setCustomConsole(this._consoleCb, cols, rows);
     await this._dataDev.writeFile('/qos-agent', new Uint8Array(await agent));
 
     const up = this._waitUp();
     this._agentLoop();
     await up;
+    await this._ensureDefaults();
     await this._runSetup();
   }
 
@@ -400,6 +467,23 @@ class VM {
     this._pending.clear();
     for (const s of this._sessions.values()) s._end(-1);
     this._sessions.clear();
+    this._vts.clear();
+  }
+
+  // VM defaults, applied on every boot but only where missing: a git
+  // identity (so `git commit` works out of the box; `setup` may override it)
+  // and a hostname in the bash prompt.
+  async _ensureDefaults() {
+    const gitconfig = `${HOME}/.gitconfig`;
+    const git = await this._readText(gitconfig).catch(() => '');
+    const missing = [];
+    if (!/^\s*name\s*=/m.test(git)) missing.push('\tname = Student');
+    if (!/^\s*email\s*=/m.test(git)) missing.push('\temail = student@example.com');
+    if (missing.length) {
+      await this._writeFile(gitconfig, `${git && !git.endsWith('\n') ? '\n' : ''}[user]\n${missing.join('\n')}\n`, true);
+    }
+    const bashrc = await this._readText(`${HOME}/.bashrc`).catch(() => null);
+    if (bashrc !== null && !bashrc.includes(PROMPT_MARK)) await this._writeFile(`${HOME}/.bashrc`, PROMPT_FIX, true);
   }
 
   async _runSetup() {
@@ -430,8 +514,8 @@ class VM {
 
   // --- console transport --------------------------------------------------
 
-  // Queues one protocol line. Lines go out in order; keystrokes are sent
-  // synchronously unless a big transfer is in progress.
+  // Queues one agent line. Lines go out in order; they are sent synchronously
+  // unless a big transfer is in progress.
   _line(s) {
     this._q.push(s);
     if (!this._pumping) this._pump();
@@ -455,10 +539,24 @@ class VM {
     this._qh = 0;
   }
 
-  // Console output → frames. Bytes outside STX..LF frames are logged, never parsed.
+  // CheerpX VTs share one size: give them the size of the session in use and
+  // tell its foreground program (CheerpX raises no SIGWINCH itself).
+  _activate(s) {
+    this._active = s;
+    if (!this._cx || (this._size[0] === s.cols && this._size[1] === s.rows)) return;
+    this._size = [s.cols, s.rows];
+    this._send = this._cx.setCustomConsole(this._consoleCb, s.cols, s.rows);
+    if (s.pid && !s.exited) this._line(`\x02Z ${s.id}`);
+  }
+
   _onConsole(buf, vt) {
-    if (vt !== 1) return;
     const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    if (vt !== 1) { // a session's terminal
+      const s = this._vts.get(vt);
+      if (s && u8.length) { s._push(u8); this._activity(); }
+      return;
+    }
+    // tty1: agent frames. Bytes outside STX..LF frames are logged, never parsed.
     const n = u8.length;
     let i = 0;
     while (i < n) {
@@ -525,12 +623,6 @@ class VM {
     try {
       const id = num();
       switch (t) {
-        case 111: { // o: session output
-          const sess = this._sessions.get(id);
-          if (sess) sess._push(b64decode(b, p, e));
-          this._activity();
-          break;
-        }
         case 100: { // d: data chunk of a request
           const q = this._pending.get(id);
           if (q) {
@@ -561,8 +653,12 @@ class VM {
         case 120: { // x: session exit
           const code = num();
           const sess = this._sessions.get(id);
-          this._sessions.delete(id);
-          if (sess) sess._end(code);
+          if (sess) {
+            this._sessions.delete(id);
+            if (this._vts.get(sess.vt) === sess) this._vts.delete(sess.vt);
+            if (this._active === sess) this._active = null;
+            sess._end(code);
+          }
           this._activity();
           break;
         }
@@ -611,10 +707,18 @@ class VM {
     }
   }
 
-  async _writeFile(path, data) {
+  async _readFile(path) {
+    const p = this._path(path);
+    const r = await this._req('R', [], fields([p]), { what: `read ${p}` });
+    return r.size ? concat(r.chunks, r.size) : new Uint8Array(0);
+  }
+
+  async _readText(path) { return dec.decode(await this._readFile(path)); }
+
+  async _writeFile(path, data, append = false) {
     const p = this._path(path);
     const u8 = toBytes(data);
-    if (u8.length > this._bulkWrite && this._dataDev) {
+    if (!append && u8.length > this._bulkWrite && this._dataDev) {
       // Bulk path: hand the bytes to the VM through the DataDevice (fast) and
       // let the agent copy them. DataDevice files cannot be deleted or
       // overwritten, hence a fresh name per transfer.
@@ -622,7 +726,7 @@ class VM {
       await this._dataDev.writeFile(name, u8);
       await this._req('F', [], fields(['/data' + name, p]), { what: `write ${p}` });
     } else {
-      await this._req('W', [0], fields([p, u8]), { what: `write ${p}` });
+      await this._req('W', [append ? 1 : 0], fields([p, u8]), { what: `write ${p}` });
     }
     this._activity();
   }
@@ -653,23 +757,33 @@ class VM {
   // --- public API ---------------------------------------------------------
 
   /**
-   * Opens a pty running `bash -l` (or `bash -lc cmd`; cmd may be an argv array).
-   * opts: {cols, rows, cwd, cmd, env}. A missing cwd falls back to ~.
+   * Opens a terminal session running `bash -l` (or `bash -lc cmd`; cmd may be
+   * an argv array). opts: {cols, rows, cwd, cmd, env}. A missing cwd falls
+   * back to ~. At most vm.maxSessions (6) sessions can be open at once.
    */
   async openSession({ cols = 80, rows = 24, cwd, cmd, env } = {}) {
     await this.ready;
+    let vt = VT_FIRST;
+    while (vt <= VT_LAST && this._vts.has(vt)) vt++;
+    if (vt > VT_LAST) {
+      throw new Error(`Too many terminals: at most ${this.maxSessions} can be open at once. Close one first.`);
+    }
     if (this._firstSession) { this._firstSession = false; this._setStatus('Starting session…'); }
     if (Array.isArray(cmd)) cmd = cmd.map(shellQuote).join(' ');
     const id = this._nextId++;
-    const s = new Session(this, id, cols | 0 || 80, rows | 0 || 24);
-    this._sessions.set(id, s); // before the request: catch output that races the reply
+    const s = new Session(this, id, vt, Math.max(1, cols | 0) || 80, Math.max(1, rows | 0) || 24);
+    this._vts.set(vt, s); // before the request: catch output that races the reply
+    this._sessions.set(id, s);
+    this._activate(s);    // the shell starts with this session's size
     const dir = this._path(cwd);
     try {
-      const r = await this._req('S', [s.cols, s.rows], fields([dir, cmd || '', ...envFields(env)]),
+      const r = await this._req('S', [vt], fields([dir, cmd || '', ...envFields(env)]),
         { what: 'open session', id });
       s.pid = r.num;
     } catch (e) {
       this._sessions.delete(id);
+      this._vts.delete(vt);
+      if (this._active === s) this._active = null;
       throw e;
     }
     return s;
@@ -689,14 +803,9 @@ class VM {
   /** {type, size, mtime, mode} following symlinks, or null if it does not exist. */
   async stat(path) { await this.ready; return this._stat(path); }
 
-  async readFile(path) {
-    await this.ready;
-    const p = this._path(path);
-    const r = await this._req('R', [], fields([p]), { what: `read ${p}` });
-    return r.size ? concat(r.chunks, r.size) : new Uint8Array(0);
-  }
+  async readFile(path) { await this.ready; return this._readFile(path); }
 
-  async readText(path) { return dec.decode(await this.readFile(path)); }
+  async readText(path) { await this.ready; return this._readText(path); }
 
   /** Writes (creates/truncates) a file. data: string | Uint8Array | ArrayBuffer. */
   async writeFile(path, data) { await this.ready; return this._writeFile(path, data); }
