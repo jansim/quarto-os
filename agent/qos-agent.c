@@ -29,7 +29,8 @@
  *   + id b64        append to body of request id
  *   S id vt         start a session on /dev/tty<vt>; body: cwd \0 cmd \0 K=V ...
  *                   (empty cmd = login shell)                   -> r id 0 pid
- *   Z id            the terminal size changed: SIGWINCH to the session (no reply)
+ *   Z id            the terminal size changed: SIGWINCH to the session's shell and
+ *                   foreground full-screen programs (no reply; see session_winch)
  *   Y id            Ctrl-C typed: if the tty has ISIG but is non-canonical (CheerpX
  *                   then passes ^C through as data) send SIGINT to the foreground
  *                   job -> r id 0 1; otherwise -> r id 0 0 (page sends the byte)
@@ -58,8 +59,9 @@
  * (lf, ld, lo, l- for a dangling link). Names never contain '/' or NUL.
  *
  * Other CheerpX quirks handled here (see agent/README.md): VT sizes are global
- * and changing them raises no SIGWINCH; kill(-pgrp) is not supported (we scan
- * /proc and compare getpgid()/getsid()); opendir() succeeds on regular files.
+ * and changing them raises no SIGWINCH, and SIGWINCH kills processes without a
+ * handler; kill(-pgrp) is not supported (we scan /proc and compare
+ * getpgid()/getsid()); opendir() succeeds on regular files.
  */
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -370,6 +372,49 @@ static void signal_foreground(kid_t *k, int sig) {
   if (fg <= 0 || !signal_group(fg, 0, sig)) signal_group(k->pid, 1, sig);
 }
 
+/* Reads the command name of pid p ("comm", from /proc/p/stat). */
+static int proc_name(pid_t p, char *name, size_t size) {
+  char path[32], buf[128];
+  snprintf(path, sizeof path, "/proc/%d/stat", p);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return 0;
+  ssize_t n = read(fd, buf, sizeof buf - 1);
+  close(fd);
+  if (n <= 0) return 0;
+  buf[n] = 0;
+  char *a = strchr(buf, '('), *b = strrchr(buf, ')');
+  if (!a || !b || b <= a || (size_t)(b - a - 1) >= size) return 0;
+  memcpy(name, a + 1, b - a - 1);
+  name[b - a - 1] = 0;
+  return 1;
+}
+
+/* CheerpX terminates a process that receives SIGWINCH without a handler
+ * (Linux ignores it), and /proc has no SigCgt to tell. So the new size is
+ * announced only to the session's interactive shell and to well-known
+ * full-screen programs that always handle SIGWINCH. */
+static const char *WINCH_OK[] = {
+    "vim", "vi", "vim.basic", "vim.tiny", "nvim", "nano", "less", "more", "most", "man",
+    "top", "htop", "watch", "mc", "emacs", "tmux", "screen", "w3m", "lynx", "links",
+    "elinks", "tig", "ncdu", "alsamixer", "dialog", "whiptail", NULL};
+
+static void session_winch(kid_t *k) {
+  pid_t fg = k->fd >= 0 ? tcgetpgrp(k->fd) : -1;
+  DIR *d = opendir("/proc");
+  if (!d) return;
+  struct dirent *e;
+  while ((e = readdir(d))) {
+    pid_t p = atoi(e->d_name);
+    if (p <= 1 || getsid(p) != k->pid) continue;
+    int ok = p == k->pid; /* the login shell (readline redraws the prompt) */
+    char name[32];
+    if (!ok && fg > 0 && getpgid(p) == fg && proc_name(p, name, sizeof name))
+      for (int i = 0; WINCH_OK[i] && !ok; i++) ok = !strcmp(name, WINCH_OK[i]);
+    if (ok) kill(p, SIGWINCH);
+  }
+  closedir(d);
+}
+
 /* Restores default signal state in a freshly forked child. */
 static void child_signals(void) {
   struct sigaction sa;
@@ -438,6 +483,10 @@ static void op_session(long id, int vt, buf_t *body) {
   snprintf(dev, sizeof dev, "/dev/tty%d", vt);
   int h = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (h < 0) return reply_err(id, errno);
+  /* Discard input a previous session left unread (tcflush is EINVAL on VTs).
+   * The page sends nothing for this session before our reply. */
+  char junk[256];
+  while (read(h, junk, sizeof junk) > 0) {}
   char **env = make_env(f + 2, nf > 2 ? nf - 2 : 0);
   pid_t pid = fork();
   if (pid < 0) {
@@ -787,7 +836,7 @@ static void dispatch(char *s, size_t n) {
   size_t b64len = b64 ? strlen(b64) : 0;
 
   switch (t) { /* requests without a body */
-    case 'Z': { kid_t *k = kid_find(id); if (k && k->kind == K_SESSION && k->alive) signal_foreground(k, SIGWINCH); return; }
+    case 'Z': { kid_t *k = kid_find(id); if (k && k->kind == K_SESSION && k->alive) session_winch(k); return; }
     case 'Y': return op_interrupt(id);
     case 'C': return op_close(id);
     case 'K': return op_kill(id, num);

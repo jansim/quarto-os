@@ -231,8 +231,13 @@ whose message is human readable.
 - Default disk `wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2`
   (Debian buster i386): bash, git 2.20.1, python3.7, nano, vim, `script`; no tmux.
   User `user` uid/gid 1000, home `/home/user`. First `cx.run` ≈ 10 s (disk streaming).
-- CheerpX exposes ONE console: `send = cx.setCustomConsole((buf, vt) => …, cols, rows)`,
-  `send(byteValue)` per input byte. So multiple terminals + file access go
-  through an in-VM agent multiplexing ptys and fs ops over that console.
+- CheerpX exposes one console with 7 virtual terminals: output arrives via
+  `setCustomConsole((buf, vt) => …, cols, rows)` tagged with `vt`, input goes in with
+  `send(byte, vt)`. `/dev/ptmx` only ever yields one pty, so the final design runs the
+  agent (fs ops, exec, session supervision) on tty1 and one `bash -l` per session on
+  tty2–tty7 → at most 6 terminals at once; all VTs share one size (`session.activate()`).
+  See `agent/README.md` for the protocol and CheerpX quirks.
+- The coi service worker ships as an html dependency at the site root (not via
+  `add_format_resource`, which copies next to the *source* in website projects).
 - `DataDevice.writeFile(path, data)` → visible read-only under its mount (e.g. `/data`).
 - Zig (C cross-compiler) available: `<scratchpad>/zigenv/bin/python -m ziglang cc -target x86-linux-musl`.

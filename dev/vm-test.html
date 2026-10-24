@@ -61,11 +61,16 @@ async function test(name, fn) {
 // Collects a session's output as text and waits for patterns in it.
 function collect(s) {
   const td = new TextDecoder();
-  const c = { text: '', lastAt: 0, waiters: new Set(), exit: null };
+  const c = { text: '', lastAt: 0, waiters: new Set(), exit: null, timer: 0 };
+  const check = () => {
+    c.timer = 0;
+    for (const w of c.waiters) if (w.re.test(c.text.slice(w.from))) { c.waiters.delete(w); w.resolve(c.text.slice(w.from)); }
+  };
   s.onData((u8) => {
     c.text += td.decode(u8, { stream: true });
     c.lastAt = performance.now();
-    for (const w of c.waiters) if (w.re.test(c.text.slice(w.from))) { c.waiters.delete(w); w.resolve(c.text.slice(w.from)); }
+    // VT output arrives in many small chunks: test patterns at most every 5 ms.
+    if (c.waiters.size && !c.timer) c.timer = setTimeout(check, 5);
   });
   s.onExit((code) => { c.exit = code; });
   c.mark = () => c.text.length;
@@ -92,17 +97,28 @@ async function sha256(u8) {
 const T0 = performance.now();
 let vm;
 
-async function boot(config) {
+let early = null; // sessions requested before vm.ready (see mainSuite)
+async function boot(config, earlySessions = 0) {
   vm = await createVM(config, { baseUrl: new URL('../_extensions/quarto-os/', location.href).href });
   window.vm = vm;
   vm.on('status', (m) => { statuses.push([Math.round(performance.now() - T0), m]); print(`  status: ${m}`, 'dim'); });
+  // Like a page with several terminals: all ask for a session while booting.
+  if (earlySessions) {
+    early = Array.from({ length: earlySessions }, (_, i) => {
+      const cwd = `~/early${i}`;
+      const p = vm.openSession({ cols: 70 + i * 10, rows: 20 + i, cwd: i === 0 ? '~' : cwd })
+        .then((s) => ({ s, c: collect(s), openedAt: performance.now(), cwd: i === 0 ? '/home/user' : `/home/user/early${i}` }));
+      p.catch(() => {});
+      return p;
+    });
+  }
   await vm.ready;
   timings.timeToReadyMs = Math.round(performance.now() - T0);
 }
 
 async function mainSuite() {
   await test('boot: createVM + ready', async () => {
-    await boot({ setup: 'mkdir -p ~/from-setup\necho "SETUP OUTPUT LINE"\n' });
+    await boot({ setup: 'mkdir -p ~/from-setup ~/early1 ~/early2 ~/early3\necho "SETUP OUTPUT LINE"\n' }, 4);
     assert(vm.home === '/home/user', 'home');
     return { timeToReadyMs: timings.timeToReadyMs, statuses: statuses.map((s) => s[1]).slice(0, 8) };
   });
@@ -114,6 +130,43 @@ async function mainSuite() {
     const marks = await vm.ls('~/.cache/quarto-os');
     assert(marks.some((e) => e.name.startsWith('setup-')), 'marker missing');
     return marks.map((e) => e.name).join(',');
+  });
+
+  await test('4 sessions opened concurrently before ready: isolated, own cwd', async () => {
+    const all = await Promise.all(early);
+    const vts = new Set(all.map((e) => e.s.vt));
+    assert(vts.size === 4, 'distinct VTs: ' + [...vts]);
+    // The prompt must show up with zero input.
+    const firstPrompt = await Promise.all(all.map(async (e) => {
+      await e.c.wait(/\$ $/, 0, 20000);
+      return Math.round(e.c.lastAt - e.openedAt);
+    }));
+    timings.promptWithoutInputMs = Math.max(...firstPrompt);
+    assert(all.every((e) => e.c.text.includes(`user@quarto-os`)), 'hostname in prompt: ' + JSON.stringify(all[0].c.text.slice(-120)));
+    // Each session sees its own cwd and its own tty; output does not leak.
+    const res = await Promise.all(all.map((e, i) => run(e.s, e.c, `echo "I am $((${i} + 100))"; pwd; tty`)));
+    res.forEach((r, i) => {
+      assert(r.text.includes(`I am ${i + 100}`), `session ${i} output: ${JSON.stringify(r.text)}`);
+      assert(r.text.includes(all[i].cwd + '\r\n'), `session ${i} cwd: ${JSON.stringify(r.text)}`);
+      assert(r.text.includes(`/dev/tty${all[i].s.vt}`), `session ${i} tty (vt ${all[i].s.vt}): ${JSON.stringify(r.text)}`);
+    });
+    all.forEach((e, i) => all.forEach((f, j) => {
+      if (i !== j) assert(!e.c.text.includes(`I am ${j + 100}`), `session ${j} output leaked into ${i}`);
+      if (i !== j) assert(!/job control|Bad file descriptor/.test(e.c.text), 'job control warning in ' + i);
+    }));
+    return `VTs ${all.map((e) => e.s.vt).join(',')}; prompts ${firstPrompt.join('/')} ms after open, no input sent`;
+  });
+
+  await test('max sessions: 6 open at once, the 7th is refused', async () => {
+    const all = await Promise.all(early);
+    const more = await Promise.all([vm.openSession(), vm.openSession()]);
+    let err;
+    try { await vm.openSession(); } catch (e) { err = e; }
+    assert(err && /at most 6/.test(err.message), 'expected refusal, got ' + err);
+    const closed = [...all.map((e) => e.s), ...more].map((s) => new Promise((r) => s.onExit(r)));
+    [...all.map((e) => e.s), ...more].forEach((s) => s.close());
+    const codes = await within(Promise.all(closed), 10000, 'close all');
+    return `refused: "${err.message}"; closed with ${codes.join(',')}`;
   });
 
   await test('ping round trip', async () => {
@@ -251,16 +304,21 @@ async function mainSuite() {
     const t0 = performance.now();
     [s1, s2] = await Promise.all([vm.openSession({ cols: 80, rows: 24 }), vm.openSession({ cols: 100, rows: 30, cwd: '~/a' })]);
     c1 = collect(s1); c2 = collect(s2);
-    const [a, b] = await Promise.all([run(s1, c1, 'tty; pwd; stty size'), run(s2, c2, 'tty; pwd; stty size')]);
+    // Sequential: CheerpX VTs share one size, which follows the session in use.
+    const a = await run(s1, c1, 'tty; pwd; stty size');
+    const b = await run(s2, c2, 'tty; pwd; stty size');
     timings.firstSessionPromptMs = Math.round(performance.now() - t0);
-    assert(/\/dev\/pts\/\d+/.test(a.text) && /\/dev\/pts\/\d+/.test(b.text), 'tty');
-    const ttyA = /\/dev\/pts\/\d+/.exec(a.text)[0], ttyB = /\/dev\/pts\/\d+/.exec(b.text)[0];
+    assert(/\/dev\/tty\d+/.test(a.text) && /\/dev\/tty\d+/.test(b.text), 'tty');
+    const ttyA = /\/dev\/tty\d+/.exec(a.text)[0], ttyB = /\/dev\/tty\d+/.exec(b.text)[0];
     assert(ttyA !== ttyB, 'distinct ptys');
     assert(/\/home\/user\r?\n/.test(a.text) && /\/home\/user\/a\r?\n/.test(b.text), 'cwd');
     assert(/24 80/.test(a.text) && /30 100/.test(b.text), 'initial size');
     assert(s1.pid > 0 && s2.pid > 0 && s1.pid !== s2.pid, 'pids');
     const env = await run(s1, c1, 'echo "$TERM|$LANG|$SHELL|$USER|$HOME|$PATH"; id -u; shopt -q login_shell && echo LOGIN');
-    assert(env.text.includes('xterm-256color|C.UTF-8|/bin/bash|user|/home/user|/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'), env.text);
+    // (a login shell's /etc/profile resets PATH for uid 1000; exec keeps ours)
+    assert(/xterm-256color\|C\.UTF-8\|\/bin\/bash\|user\|\/home\/user\|[^|\r]*\/usr\/bin/.test(env.text), env.text);
+    const ex = await vm.exec('echo $PATH');
+    assert(ex.output === '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n', 'exec PATH ' + ex.output);
     assert(/\b1000\b/.test(env.text) && /LOGIN/.test(env.text), 'uid 1000 + login shell');
     return `${ttyA} ${ttyB}, both prompts after ${timings.firstSessionPromptMs} ms`;
   });
@@ -270,14 +328,27 @@ async function mainSuite() {
     s1.resize(120, 40);
     const r = await run(s1, c1, 'stty size');
     assert(/40 120/.test(r.text), r.text);
-    const from = c1.mark();
-    s1.write(`sh -c 'trap "echo WINCH \\$(stty size)" WINCH; echo TRAPPED; while :; do sleep 0.1; done'\r`);
-    await c1.wait(/TRAPPED/, from);
+    // VT sizes are global in CheerpX: the size follows the session in use.
+    const r2 = await run(s2, c2, 'stty size');
+    assert(/30 100/.test(r2.text), 'session 2 size ' + r2.text);
+    const r3 = await run(s1, c1, 'stty size');
+    assert(/40 120/.test(r3.text), 'session 1 size again ' + r3.text);
+    // The interactive shell gets SIGWINCH (CheerpX raises none itself)…
+    await run(s1, c1, `trap 'echo "WINCH $(stty size)"' WINCH`);
+    let from = c1.mark();
     s1.resize(90, 33);
     const w = await c1.wait(/WINCH 33 90/, from, 5000);
-    s1.write('\x03');
+    await run(s1, c1, 'trap - WINCH');
+    // …but a foreground program without a handler must survive a resize
+    // (CheerpX would kill it: SIGWINCH is only sent to known handlers).
+    from = c1.mark();
+    s1.write('sleep 1.5; echo "survived:$?"\r');
+    await sleep(600);
+    s1.resize(100, 32);
+    await c1.wait(/survived:0/, from, 5000);
+    s1.resize(120, 40);
     await run(s1, c1, 'true');
-    return w.trim().split('\n').pop().trim();
+    return w.trim().split('\n').pop().trim() + '; sleep survived a resize';
   });
 
   await test('keystroke echo latency (idle)', async () => {
@@ -288,7 +359,7 @@ async function mainSuite() {
       const t0 = performance.now();
       s1.write(ch);
       await c1.wait(new RegExp(ch), from, 5000);
-      t.push(performance.now() - t0);
+      t.push(c1.lastAt - t0); // arrival of the echo, not the (coalesced) check
     }
     s1.write('\x15'); // ^U: clear the line
     await sleep(100);
@@ -313,7 +384,19 @@ async function mainSuite() {
     const r2 = await run(s1, c1, 'echo back');
     const ms = performance.now() - t0 - 800;
     assert(ms < 5000, 'sleep not interrupted');
-    return `prompt back ${Math.round(ms)} ms after ^C`;
+    // Python REPL (readline, non-canonical): ^C must raise KeyboardInterrupt, not kill python.
+    from = c1.mark();
+    s1.write('python3 -q\r');
+    await c1.wait(/>>> $/, from, 60000);
+    s1.write('1 +');
+    await sleep(200);
+    s1.write('\x03');
+    await c1.wait(/KeyboardInterrupt\r?\n>>> $/, from, 5000);
+    s1.write('print(6 * 7)\r');
+    await c1.wait(/42\r?\n>>> $/, from, 5000);
+    s1.write('exit()\r');
+    await run(s1, c1, 'true');
+    return `prompt back ${Math.round(ms)} ms after ^C; python REPL KeyboardInterrupt ok`;
   });
 
   await test('exec does not block terminals (and vice versa)', async () => {
@@ -325,7 +408,7 @@ async function mainSuite() {
       const from = c2.mark(), t0 = performance.now();
       s2.write('x');
       await c2.wait(/x/, from, 5000);
-      t.push(performance.now() - t0);
+      t.push(c2.lastAt - t0);
     }
     s2.write('\x15');
     const r = await slow;
@@ -347,15 +430,18 @@ async function mainSuite() {
     const r = await vm.exec([
       'set -e', 'mkdir -p ~/repo && cd ~/repo', 'git init -q .',
       'printf "# Hello\\n" > README.md', 'git add README.md',
-      'git -c user.name="Quarto OS" -c user.email=os@example.com commit -q -m "first commit"',
-      'git log --oneline',
+      'git commit -q -m "first commit"', // default identity from vm.js
+      'git log --format="%s|%an|%ae"',
     ].join('\n'));
-    assert(r.code === 0 && /first commit/.test(r.output), JSON.stringify(r));
+    assert(r.code === 0 && /first commit\|Student\|student@example.com/.test(r.output), JSON.stringify(r));
+    const r2 = await vm.exec('cd ~/repo && echo more >> README.md && git -c user.name=T -c user.email=t@e commit -qam second && git log -1 --format=%an');
+    assert(r2.code === 0 && r2.output.trim() === 'T', 'explicit identity still wins: ' + r2.output);
+    await vm.exec('cd ~/repo && git reset -q --hard HEAD~1');
     const ls = await vm.ls('~/repo');
     assert(ls.some((e) => e.name === '.git' && e.type === 'dir'), '.git listed');
     assert((await vm.readText('~/repo/.git/HEAD')).startsWith('ref: refs/heads/'), 'HEAD');
     await vm.writeFile('~/repo/README.md', '# Hello\nchanged from JS\n');
-    const t = await run(s2, c2, 'cd ~/repo && git status --short && git diff --stat | cat');
+    const t = await run(s2, c2, 'cd ~/repo && git status --short | cat && git diff --stat | cat');
     assert(/M README.md/.test(t.text), t.text);
     return r.output.trim();
   });
@@ -412,6 +498,7 @@ async function mainSuite() {
     const code = await within(new Promise((r) => s.onExit(r)), 20000, 'exit');
     assert(code === 7, 'exit code ' + code);
     assert(/CMD bar \/home\/user\/repo/.test(c.text), JSON.stringify(c.text));
+    assert(!/\x1b\[2J/.test(c.text), 'screen cleared on exit (clear_console): ' + JSON.stringify(c.text));
     const s3 = await vm.openSession({ cmd: ['printf', '%s|', 'a b', "it's"] });
     const c3 = collect(s3);
     assert(await within(new Promise((r) => s3.onExit(r)), 20000, 'exit') === 0);
@@ -445,15 +532,36 @@ async function mainSuite() {
   await test('session.write of a large paste', async () => {
     const line = 'x'.repeat(100);
     const body = Array.from({ length: 300 }, (_, i) => `${i}:${line}`).join('\n') + '\n';
-    const r = await vm.exec('true');
-    const from = c1.mark();
-    s1.write("cat > ~/t1/paste.txt << 'EOF'\r");
+    // Into a canonical-mode program (cat): the tty line discipline only.
+    let from = c1.mark();
+    s1.write('cat > ~/t1/paste.txt\r');
+    await c1.wait(/paste\.txt\r\n/, from);
+    await sleep(800); // let cat start (else bash would read the paste)
+    let t0 = performance.now();
+    from = c1.mark();
+    s1.write(body);
+    // CheerpX only honours ^D (EOF) once earlier input has been consumed, so
+    // press it after the paste has been echoed, like a person would.
+    await c1.wait(/299:x{100}\r\n/, from, 60000);
+    await sleep(500);
+    from = c1.mark();
+    s1.write('\x04');
+    await c1.wait(/\$ $/, from, 60000);
+    const tCat = performance.now() - t0;
+    let got = await vm.readText('~/t1/paste.txt');
+    assert(got === body, `paste mismatch: ${got.length} vs ${body.length}`);
+    // Into bash itself (a here-doc: readline handles every line).
+    t0 = performance.now();
+    s1.write("cat > ~/t1/paste2.txt << 'EOF'\r");
     s1.write(body.replace(/\n/g, '\r'));
     s1.write('EOF\r');
     await run(s1, c1, 'true', 60000);
-    const got = await vm.readText('~/t1/paste.txt');
-    assert(got === body, `paste mismatch: ${got.length} vs ${body.length}`);
-    return `${body.length} bytes`;
+    const tBash = performance.now() - t0;
+    got = await vm.readText('~/t1/paste2.txt');
+    assert(got === body, `here-doc paste mismatch: ${got.length} vs ${body.length}`);
+    timings.paste31kCatMs = Math.round(tCat);
+    timings.paste31kReadlineMs = Math.round(tBash);
+    return `${body.length} bytes: into cat ${Math.round(tCat)} ms, into a bash here-doc ${Math.round(tBash)} ms`;
   });
 }
 
@@ -471,6 +579,9 @@ async function persistSuite(phase) {
     if (phase === 'persist1') {
       assert(count === 1 && !probe, `count ${count}, probe ${!!probe}`);
       await vm.writeFile('~/persist-probe', 'kept');
+      // CheerpX writes the overlay back to IndexedDB asynchronously; after the
+      // very first boot of a fresh cache that takes several seconds.
+      await sleep(12000);
     } else if (phase === 'persist2') {
       assert(probe && count === 1, `persisted VM: probe ${!!probe}, setup ran ${count}x (want 1)`);
     } else {
@@ -482,7 +593,32 @@ async function persistSuite(phase) {
 
 try {
   if (suite === 'main') await mainSuite();
-  else if (suite === 'boot') await test('boot only (window.vm for manual testing)', () => boot({}));
+  else if (suite === 'idle') {
+    // Proxies drop the disk WebSocket after ~35 s idle and CheerpX never
+    // reconnects on its own (vm.js's DiskSocket does). Simulate the drop.
+    const sockets = [];
+    const Native = window.WebSocket;
+    window.WebSocket = class extends Native {
+      constructor(...a) { super(...a); sockets.push(this); }
+    };
+    await test('idle: boot', () => boot({}));
+    await test('idle: cold disk reads work after the disk socket dropped', async () => {
+      await sleep(5000);
+      const open = sockets.filter((w) => w.readyState === 1);
+      assert(open.length >= 1, 'no open disk socket');
+      for (const w of open) w.close(4000, 'simulated proxy drop');
+      await sleep(1000);
+      const t0 = performance.now();
+      const r = await within(vm.exec('python3 -c "import json, email; print(6 * 7)"'), 60000, 'python3 after drop');
+      assert(r.output === '42\n', JSON.stringify(r));
+      return `closed ${open.length} socket(s); python3 (cold) then took ${Math.round(performance.now() - t0)} ms over ${sockets.length - open.length} new connection(s)`;
+    });
+  }
+  else if (suite === 'boot') {
+    await test('boot only (window.vm for manual testing)', () => boot({
+      persist: params.get('persist') === '1', cacheId: params.get('cache') || undefined, disk: params.get('disk') || undefined,
+    }));
+  }
   else await persistSuite(suite);
 } catch (e) {
   print('suite crashed: ' + (e.stack || e), 'bad');

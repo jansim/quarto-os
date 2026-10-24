@@ -98,6 +98,10 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
   offs.push(onResize(host, scheduleFit));
   fit();
   term.onResize(({ cols, rows }) => { if (session) try { session.resize(cols, rows); } catch (e) { /* ignore */ } });
+  // CheerpX terminals share one size: the focused terminal claims it before the user types.
+  const onFocusIn = () => { if (session && session.activate) try { session.activate(); } catch (e) { /* ignore */ } };
+  host.addEventListener('focusin', onFocusIn);
+  offs.push(() => host.removeEventListener('focusin', onFocusIn));
 
   // ---------- keyboard: copy / paste friendly, never leak to reveal.js
   term.attachCustomKeyEventHandler(e => {

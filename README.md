@@ -104,13 +104,13 @@ The full reference is on the [docs site](https://jansim.github.io/quarto-os/#ref
   window needs them.
 - The apps share **one VM per page** (`vm/vm.js`): CheerpX runs a Debian i386 image
   streamed block by block from a disk server. A tiny static agent inside the VM
-  (`qos-agent`, C, in `agent/`) multiplexes ptys and file operations over CheerpX's
-  single console.
+  (`qos-agent`, C, in `agent/`) handles file operations and starts shells; each
+  terminal runs on its own CheerpX virtual console (up to six at once).
 - CheerpX needs `SharedArrayBuffer`, i.e. a cross-origin isolated page. On hosts that
   can't send COOP/COEP headers (GitHub Pages), pages that use the VM register
   `coi-serviceworker.js`, which reloads the page once on the first visit.
 
-Limitations: no network inside the VM, third-party iframes (e.g. YouTube) are blocked
+Limitations: at most six terminals open at once, no network inside the VM, third-party iframes (e.g. YouTube) are blocked
 on VM pages, the first boot downloads the engine and disk blocks, Chromium-based
 browsers and Firefox are recommended. Details on the
 [docs site](https://jansim.github.io/quarto-os/#limitations).

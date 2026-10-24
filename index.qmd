@@ -408,8 +408,9 @@ nothing a student types leaves their machine.
 **One VM per page.** All terminals, editors and explorers on a page talk to the *same*
 machine. A file created in one terminal immediately shows up in the explorer and in
 VS Code; a commit made in the terminal shows up in the editor's source control. A tiny
-agent inside the VM (`qos-agent`, a static C binary) multiplexes the terminals and the
-file operations over CheerpX's single console.
+agent inside the VM (`qos-agent`, a 48 KB static C binary) serves the file operations
+and starts the shells; each terminal runs on its own CheerpX virtual console, so
+keystrokes go straight to `bash` without any extra hop.
 
 **Streaming disk.** The disk image is not downloaded up front: CheerpX fetches only the
 blocks that are actually read and caches them in the browser, so the first boot takes
@@ -417,7 +418,7 @@ a few seconds longer and later visits are fast. Changes are kept in memory and v
 on reload, unless `vm.persist: true` stores them in IndexedDB.
 
 **Lazy loading.** Every page only loads the small core (`quarto-os.js` +
-`quarto-os.css`, well under 60 KB). The heavy parts — xterm.js for terminals, Monaco
+`quarto-os.css`, about 60 KB before compression). The heavy parts — xterm.js for terminals, Monaco
 (the editor of VS Code) for the editor, CheerpX and the VM layer — are loaded the
 first time a window needs them, e.g. when a terminal scrolls into view or someone
 clicks a dock icon. Pages with only content windows never download any of it.
@@ -430,7 +431,8 @@ reloads the page once on the first visit.
 
 ## Teaching tips {#teaching-tips}
 
-- **Prepare the machine with `vm.setup`.** Configure `git` identities, create folders
+- **Prepare the machine with `vm.setup`.** Configure `git` identities (the default is
+  `Student <student@example.com>`, so commits work out of the box), create folders
   and starter files so every student starts from exactly the same state. A reload gives
   everyone a fresh, clean machine (unless you enable `persist`).
 - **Make the invisible visible.** Put a terminal next to an Explorer with hidden files
@@ -454,6 +456,10 @@ reloads the page once on the first visit.
   or other sites' pages (including the `browser` app pointing at them) are blocked on
   pages that use the VM. Self-host such media or put it on a page without VM apps.
   Pages with only content windows are not affected.
+- **At most six terminals at once.** CheerpX provides six virtual consoles, so a page
+  can have up to six terminals (including VS Code's integrated terminal) open at the
+  same time; a seventh shows a message asking to close one. Terminals in windows that
+  never scrolled into view don't count.
 - **No network inside the VM.** `apt install`, `pip install`, `curl` or `git clone`
   from the internet don't work. Create what you need in `vm.setup`, or use a custom
   disk image that already contains it.

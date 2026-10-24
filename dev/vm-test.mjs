@@ -1,7 +1,7 @@
 // Runs dev/vm-test.html in headless Chromium against the real CheerpX + disk.
 //
 //   node dev/server.mjs . 8201 &      # COOP/COEP static server
-//   node dev/vm-test.mjs [--port 8201] [--suite main|persist|all]
+//   node dev/vm-test.mjs [--port 8201] [--suite main|idle|persist|all] [--verbose]
 //
 // Exit code 0 when every test passed.
 import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
@@ -51,6 +51,7 @@ async function runSuite(query, timeout = 900000) {
 }
 
 if (which === 'main' || which === 'all') await runSuite('suite=main');
+if (which === 'idle' || which === 'all') await runSuite('suite=idle');
 if (which === 'persist' || which === 'all') {
   const cache = `qos-test-${Date.now()}`;
   for (const phase of ['persist1', 'persist2', 'persist3']) await runSuite(`suite=${phase}&cache=${cache}`);

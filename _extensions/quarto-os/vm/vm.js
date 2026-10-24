@@ -125,6 +125,111 @@ function parseRecord(r) {
 }
 
 // ---------------------------------------------------------------------------
+// Self-healing disk socket
+// ---------------------------------------------------------------------------
+// CheerpX's CloudDevice reads the disk over one WebSocket and never reconnects
+// when it drops (proxies close idle sockets: seen after ~35 s); from then on
+// every uncached read, e.g. starting python3 after a pause, hangs forever.
+// The protocol is simple: per connection the server first sends a text
+// header, then answers each "start-end" text request with that many bytes.
+// So for the disk URL we hand CheerpX a stand-in that reconnects on demand,
+// swallows the repeated header and re-sends unanswered requests.
+
+class DiskSocket extends EventTarget {
+  constructor(Native, url) {
+    super();
+    this._Native = Native;
+    this.url = url;
+    this.binaryType = 'arraybuffer';
+    this.onmessage = this.onerror = this.onopen = this.onclose = null;
+    this._queue = [];       // unanswered requests: [request, bytes still expected]
+    this._header = false;   // the first connection's header was delivered
+    this._closed = false;   // closed by CheerpX
+    this._failed = false;
+    this._retry = 0;
+    this._timer = 0;
+    this._connect();
+  }
+
+  get readyState() { return this._closed ? 3 : this._header ? 1 : 0; }
+
+  _connect() {
+    const ws = this._ws = new this._Native(this.url);
+    ws.binaryType = 'arraybuffer';
+    this._live = false; // header received on this connection
+    ws.onmessage = (e) => {
+      if (typeof e.data === 'string') {
+        this._live = true;
+        this._retry = 0;
+        if (this._header) { for (const q of this._queue) ws.send(q[0]); return; } // reconnected
+        this._header = true;
+      } else if (this._queue.length) {
+        const q = this._queue[0];
+        q[1] -= e.data.byteLength;
+        if (q[1] <= 0 || e.data.byteLength <= 1) this._queue.shift(); // ≤1 byte: CheerpX control reply
+      }
+      this._emit(new MessageEvent('message', { data: e.data }));
+    };
+    ws.onerror = () => { if (!this._header) this._fail(); };
+    ws.onclose = () => {
+      if (this._closed || this._ws !== ws) return;
+      if (!this._header) return this._fail();
+      if (!this._live) this._retry++;
+      this._live = false;
+      if (this._queue.length) this._reconnect(); // else: lazily, on the next request
+    };
+    ws.onopen = () => { if (!this._header) this._emit(new Event('open')); };
+  }
+
+  _fail() { // the first connection failed: let CheerpX see it (vm.js then tries https)
+    if (this._failed) return;
+    this._failed = true;
+    this._emit(new Event('error'));
+  }
+
+  _reconnect() {
+    if (this._timer || this._closed) return;
+    const delay = this._retry ? Math.min(8000, 250 * 2 ** this._retry) : 0;
+    this._timer = setTimeout(() => { this._timer = 0; if (!this._closed) this._connect(); }, delay);
+  }
+
+  send(data) {
+    const m = /^(\d+)-(\d+)$/.exec(String(data));
+    this._queue.push([data, m ? +m[2] - +m[1] + 1 : 1]);
+    const ws = this._ws;
+    if (this._live && ws.readyState === 1) ws.send(data);
+    else if (ws.readyState >= 2) this._reconnect();
+    // else (re)connecting: queued requests go out when the header arrives
+  }
+
+  close() {
+    this._closed = true;
+    clearTimeout(this._timer);
+    try { this._ws.close(); } catch { /* ignore */ }
+  }
+
+  _emit(ev) {
+    const h = this['on' + ev.type];
+    if (h) safe(() => h.call(this, ev));
+    this.dispatchEvent(ev);
+  }
+}
+
+function installDiskSocket(diskUrl) {
+  const Native = globalThis.WebSocket;
+  if (!Native || Native.__qosDisks) { Native?.__qosDisks?.add(diskUrl); return; }
+  const disks = new Set([diskUrl]);
+  function WebSocket(url, protocols) {
+    if (disks.has(String(url))) return new DiskSocket(Native, String(url));
+    return protocols === undefined ? new Native(url) : new Native(url, protocols);
+  }
+  WebSocket.prototype = Native.prototype; // instanceof keeps working
+  for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) WebSocket[k] = Native[k];
+  WebSocket.__qosDisks = disks;
+  globalThis.WebSocket = WebSocket;
+}
+
+// ---------------------------------------------------------------------------
 // Session: a shell on one of the VM's virtual terminals
 // ---------------------------------------------------------------------------
 
@@ -296,7 +401,7 @@ class VM {
     this._fl = 0;
     this._inFrame = false;
     this._stray = '';
-    this._act = { timer: 0, first: 0 };
+    this._act = { timer: 0, first: 0, last: 0 };
     this._watches = new Map();
     this._watchTimer = 0;
     this._bulkSeq = 0;
@@ -335,18 +440,26 @@ class VM {
     for (const cb of this._listeners.status) safe(cb, msg);
   }
 
-  // Debounced 'activity': 300 ms after the last trigger, at least every second.
+  // Debounced 'activity': 300 ms after the last trigger, at least every
+  // second while triggers keep coming. One timer, re-armed only when it fires
+  // (this runs for every chunk of terminal output).
   _activity() {
     if (!this._listeners.activity.size && !this._watches.size) return;
-    const a = this._act, now = performance.now();
-    if (!a.first) a.first = now;
-    clearTimeout(a.timer);
-    a.timer = setTimeout(() => {
-      a.first = 0;
-      for (const cb of this._listeners.activity) safe(cb);
-      this._pollWatches();
-    }, Math.max(0, Math.min(ACTIVITY_DEBOUNCE, a.first + ACTIVITY_MAX_WAIT - now)));
+    const a = this._act;
+    a.last = performance.now();
+    if (!a.first) a.first = a.last;
+    if (!a.timer) a.timer = setTimeout(this._actFire, ACTIVITY_DEBOUNCE);
   }
+
+  _actFire = () => {
+    const a = this._act, now = performance.now();
+    const due = Math.min(a.last + ACTIVITY_DEBOUNCE, a.first + ACTIVITY_MAX_WAIT);
+    if (due - now > 1) { a.timer = setTimeout(this._actFire, due - now); return; }
+    a.timer = 0;
+    a.first = 0;
+    for (const cb of this._listeners.activity) safe(cb);
+    this._pollWatches();
+  };
 
   // --- boot ---------------------------------------------------------------
 
@@ -366,6 +479,7 @@ class VM {
     try {
       switch (diskType) {
         case 'cloud':
+          if (disk.startsWith('wss:')) installDiskSocket(disk);
           try {
             return await CX.CloudDevice.create(disk);
           } catch (e) {
@@ -417,6 +531,10 @@ class VM {
     const up = this._waitUp();
     this._agentLoop();
     await up;
+    // Warm the disk cache for what a terminal needs (bash, its libraries,
+    // profile/.bashrc helpers: ~5 s of cold disk reads, 0.35 s warm) while
+    // the steps below run and before anyone opens a terminal.
+    this._exec('bash -lic exit < /dev/null', { env: { SHLVL: '1', HISTFILE: '/dev/null' } }).catch(() => {});
     await this._ensureDefaults();
     await this._runSetup();
   }
@@ -776,6 +894,9 @@ class VM {
     this._sessions.set(id, s);
     this._activate(s);    // the shell starts with this session's size
     const dir = this._path(cwd);
+    // SHLVL=1 → bash runs at level 2, so Debian's ~/.bash_logout does not
+    // `clear_console` (which wipes a VT) when the session ends.
+    env = { SHLVL: '1', ...env };
     try {
       const r = await this._req('S', [vt], fields([dir, cmd || '', ...envFields(env)]),
         { what: 'open session', id });
