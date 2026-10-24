@@ -567,6 +567,7 @@ function tick() {
 
 // == open() and target resolution
 function hostFor(target, origin) {
+  if (origin instanceof Win) origin = origin.el;
   if (target instanceof Win) { origin = target.el; target = null; }
   if (typeof target === 'string' && target) {
     const t = D.getElementById(target.replace(/^#/, ''));
@@ -709,7 +710,7 @@ function coi() {
 }
 
 // == init
-// the Lua filter can't see shortcodes, so check the DOM for VM apps too
+// the Lua filter can't see shortcodes: check the DOM too
 function pageUsesVM() {
   const vmApp = a => !!(apps[a] && apps[a].vm);
   return !!D.querySelector('.qos-run') ||

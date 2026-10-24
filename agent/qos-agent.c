@@ -1,12 +1,19 @@
 /*
  * qos-agent — the in-VM helper of Quarto OS.
  *
- * CheerpX gives the page exactly one console. This agent runs on it and
- * multiplexes over it: any number of pty sessions, filesystem operations and
- * asynchronous `sh -c` executions, all served from one poll() loop so a long
- * exec or a big file read never blocks terminal traffic.
+ * CheerpX gives the page one control console (tty1) plus six more virtual
+ * terminals (tty2..tty7) whose bytes the page reads and writes directly
+ * (console callback `vt` argument / `send(byte, vt)`). This agent runs on
+ * tty1 and provides everything else from one poll() loop: it starts and
+ * supervises terminal sessions on the VTs, and serves filesystem operations
+ * and asynchronous `sh -c` executions, so a long exec or a big file read
+ * never blocks terminal traffic.
  *
- * Wire protocol (version 1). Both directions are line oriented; every frame
+ * Why VTs and not ptys: in CheerpX 1.4.0 every open of /dev/ptmx yields the
+ * same pty (/dev/pts/1), so a second pty session would be cross-wired with
+ * the first. VTs are independent ttys with termios and job control.
+ *
+ * Wire protocol (version 2). Both directions are line oriented; every frame
  * starts with STX (0x02) and ends with LF. Anything outside a frame (kernel
  * messages, \r inserted by a cooked tty, echo) is ignored by the receiver.
  * Binary payloads are base64; numbers are decimal.
@@ -19,40 +26,40 @@
  * line itself follows (its optional trailing b64 is appended too). Body
  * fields are separated by NUL bytes.
  *
- *   + id b64                 append to body of request id
- *   S id cols rows           open pty session; body: cwd \0 cmd \0 K=V \0 ...
- *                            (empty cmd = login shell)   -> r id 0 pid
- *   I id b64                 input for session id (no reply)
- *   Z id cols rows           resize session (no reply)
- *   C id                     close session (SIGHUP, then SIGKILL) -> x frame
- *   K id sig                 signal every process of session/exec id
- *   L id                     list dir; body: path -> d frames, r id 0 count
- *   T id                     stat;     body: path -> r id 0 0 b64(record)
- *   R id                     read file; body: path -> d frames, r id 0 size
- *   W id append              write file; body: path \0 data -> r id 0 size
- *   F id                     copy file; body: src \0 dst -> r id 0 size
- *   M id                     mkdir -p; body: path
- *   D id                     rm -r (missing path is not an error); body: path
- *   N id                     rename; body: from \0 to
- *   X id                     exec sh -c; body: cwd \0 cmd \0 K=V ...
- *                            -> d frames (stdout+stderr), r id 0 exitcode
- *   Q id                     ping -> r id 0
+ *   + id b64        append to body of request id
+ *   S id vt         start a session on /dev/tty<vt>; body: cwd \0 cmd \0 K=V ...
+ *                   (empty cmd = login shell)                   -> r id 0 pid
+ *   Z id            the terminal size changed: SIGWINCH to the session (no reply)
+ *   Y id            Ctrl-C typed: if the tty has ISIG but is non-canonical (CheerpX
+ *                   then passes ^C through as data) send SIGINT to the foreground
+ *                   job -> r id 0 1; otherwise -> r id 0 0 (page sends the byte)
+ *   C id            close session (SIGHUP, then SIGKILL)        -> x frame
+ *   K id sig        signal every process of session/exec id
+ *   L id            list dir; body: path        -> d frames, r id 0 count
+ *   T id            stat; body: path            -> r id 0 0 b64(record)
+ *   R id            read file; body: path       -> d frames, r id 0 size
+ *   W id append     write file; body: path \0 data              -> r id 0 size
+ *   F id            copy file; body: src \0 dst                 -> r id 0 size
+ *   M id            mkdir -p; body: path
+ *   D id            rm -r (missing path is not an error); body: path
+ *   N id            rename; body: from \0 to
+ *   X id            exec sh -c; body: cwd \0 cmd \0 K=V ...
+ *                   -> d frames (stdout+stderr), r id 0 exitcode
+ *   Q id            ping -> r id 0
  *
- *   h 0 version pid          hello, sent once at start-up
- *   o id b64                 session output
- *   x id code                session ended (code = exit status or 128+signal)
- *   d id b64                 data chunk belonging to request id
- *   r id errno num [b64]     request finished; errno 0 = success, otherwise
- *                            b64 carries strerror(errno)
+ *   h 0 version pid       hello, sent once at start-up
+ *   x id code             session ended (exit status or 128+signal)
+ *   d id b64              data chunk belonging to request id
+ *   r id errno num [b64]  request finished; errno 0 = success, otherwise b64
+ *                         carries strerror(errno)
  *
  * Directory records (L) and stat records (T) are "type/size/mtime_ms/mode/name"
  * joined by NUL; type is f, d, o or l followed by the link target's type
  * (lf, ld, lo, l- for a dangling link). Names never contain '/' or NUL.
  *
- * CheerpX quirks handled here (see agent/README.md): resizing a pty does not
- * raise SIGWINCH, a pty master never reports EOF/EIO when its child exits,
- * kill(-pgrp) is not supported (we scan /proc and use getpgid/getsid), and
- * Ctrl-C in non-canonical mode is passed through as a byte instead of SIGINT.
+ * Other CheerpX quirks handled here (see agent/README.md): VT sizes are global
+ * and changing them raises no SIGWINCH; kill(-pgrp) is not supported (we scan
+ * /proc and compare getpgid()/getsid()); opendir() succeeds on regular files.
  */
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -70,13 +77,16 @@
 #include <time.h>
 #include <unistd.h>
 
-#define PROTO_VERSION 1
+#define PROTO_VERSION 2
+#define VT_FIRST 2           /* session terminals: /dev/tty2 .. /dev/tty7 */
+#define VT_LAST 7
 #define MAX_KIDS 64          /* sessions + execs alive at once */
 #define MAX_BODIES 32        /* requests with a body in flight */
 #define MAX_RJOBS 16         /* concurrent file reads */
 #define FRAME_RAW 12288      /* max raw bytes per output frame (16 KB base64) */
 #define READ_BUDGET 65536    /* max bytes read from one fd per loop iteration */
 #define EXEC_GRACE_MS 200    /* wait for pipe EOF after an exec child exited */
+#define EXEC_POLL_MS 100     /* re-check exec pipes this often (see main loop) */
 #define CLOSE_KILL_MS 300    /* SIGKILL a closed session after this delay */
 
 static const char *HOME = "/home/user";
@@ -191,12 +201,12 @@ static void frame_b64(const void *d, size_t n) {
 }
 static void frame_end(void) { buf_add(&out, "\n", 1); }
 
-/* Emits `data` as a sequence of frames of type t, FRAME_RAW bytes each. */
-static void frames(char t, long id, const void *data, size_t n) {
+/* Emits `data` as a sequence of 'd' frames, FRAME_RAW bytes each. */
+static void data_frames(long id, const void *data, size_t n) {
   const char *p = data;
   while (n > 0) {
     size_t k = n < FRAME_RAW ? n : FRAME_RAW;
-    frame_begin(t, id);
+    frame_begin('d', id);
     frame_b64(p, k);
     frame_end();
     p += k;
@@ -213,8 +223,9 @@ static void reply(long id, int err, long num, const void *d, size_t n) {
 }
 static void reply_ok(long id, long num) { reply(id, 0, num, NULL, 0); }
 static void reply_err(long id, int err) {
+  if (!err) err = EIO;
   const char *m = strerror(err);
-  reply(id, err ? err : EIO, 0, m, strlen(m));
+  reply(id, err, 0, m, strlen(m));
 }
 
 static void flush_out(void) {
@@ -237,7 +248,7 @@ static void flush_out(void) {
 }
 
 /* ------------------------------------------------------------------------ */
-/* Children (pty sessions and execs), read jobs, request bodies             */
+/* Children (sessions and execs), read jobs, request bodies                 */
 /* ------------------------------------------------------------------------ */
 
 enum { K_FREE, K_SESSION, K_EXEC };
@@ -246,15 +257,17 @@ typedef struct {
   int kind;
   long id;
   pid_t pid;
-  int fd;            /* pty master (session) or pipe read end (exec), -1 if closed */
+  int fd;            /* exec: pipe read end; session: our handle on /dev/ttyN */
+  int vt;            /* session: VT number */
   int alive;         /* not reaped yet */
   int status;        /* wait status once reaped */
   double reaped_at;  /* exec: start of the EOF grace period */
   double kill_at;    /* session: SIGKILL deadline after close, 0 = none */
-  buf_t pend;        /* session: input not yet accepted by the pty */
 } kid_t;
 
 static kid_t kids[MAX_KIDS];
+static struct termios vt_sane[VT_LAST + 1]; /* initial termios of each VT */
+static int vt_have_sane[VT_LAST + 1];
 
 typedef struct {
   long id;
@@ -282,15 +295,13 @@ static kid_t *kid_new(void) {
 }
 static void kid_free(kid_t *k) {
   if (k->fd >= 0) close(k->fd);
-  buf_free(&k->pend);
   memset(k, 0, sizeof *k);
   k->fd = -1;
 }
 
-static buf_t *body_get(long id, int create) {
+static buf_t *body_get(long id) {
   for (int i = 0; i < MAX_BODIES; i++)
-    if (bodies[i].id == id && id) return &bodies[i].b;
-  if (!create) return NULL;
+    if (bodies[i].id == id) return &bodies[i].b;
   for (int i = 0; i < MAX_BODIES; i++)
     if (!bodies[i].id) {
       bodies[i].id = id;
@@ -300,14 +311,14 @@ static buf_t *body_get(long id, int create) {
 }
 static void body_drop(long id) {
   for (int i = 0; i < MAX_BODIES; i++)
-    if (bodies[i].id == id && id) {
+    if (bodies[i].id == id) {
       buf_free(&bodies[i].b);
       bodies[i].id = 0;
     }
 }
 
-/* Splits a NUL separated body into at most max fields (the body buffer has a
- * terminating NUL appended by the dispatcher). Returns the field count. */
+/* Splits a NUL separated body into at most max fields (the dispatcher appends
+ * a terminating NUL). Returns the field count. */
 static int body_fields(buf_t *b, char **f, int max) {
   int n = 0;
   size_t i = 0;
@@ -319,7 +330,7 @@ static int body_fields(buf_t *b, char **f, int max) {
 }
 
 /* ------------------------------------------------------------------------ */
-/* Signals                                                                  */
+/* Signals and process groups                                               */
 /* ------------------------------------------------------------------------ */
 
 static int sigpipe_fds[2] = {-1, -1};
@@ -340,9 +351,10 @@ static int signal_group(pid_t val, int by_session, int sig) {
   DIR *d = opendir("/proc");
   if (d) {
     struct dirent *e;
+    pid_t self = getpid();
     while ((e = readdir(d))) {
       pid_t p = atoi(e->d_name);
-      if (p <= 1 || p == getpid()) continue;
+      if (p <= 1 || p == self) continue;
       pid_t g = by_session ? getsid(p) : getpgid(p);
       if (g == val && kill(p, sig) == 0) n++;
     }
@@ -350,6 +362,12 @@ static int signal_group(pid_t val, int by_session, int sig) {
   }
   if (!n && kill(val, sig) == 0) n++;
   return n;
+}
+
+/* Signals the foreground job of a session's terminal (or the whole session). */
+static void signal_foreground(kid_t *k, int sig) {
+  pid_t fg = k->fd >= 0 ? tcgetpgrp(k->fd) : -1;
+  if (fg <= 0 || !signal_group(fg, 0, sig)) signal_group(k->pid, 1, sig);
 }
 
 /* Restores default signal state in a freshly forked child. */
@@ -361,6 +379,13 @@ static void child_signals(void) {
   sigset_t set;
   sigemptyset(&set);
   sigprocmask(SIG_SETMASK, &set, NULL);
+}
+
+/* Closes every descriptor above 2 in a child (agent fds are CLOEXEC anyway). */
+static void child_close_fds(void) {
+  long max = sysconf(_SC_OPEN_MAX);
+  if (max < 0 || max > 4096) max = 4096;
+  for (int fd = 3; fd < max; fd++) close(fd);
 }
 
 /* Builds the child environment: defaults overridden by K=V fields. */
@@ -389,54 +414,53 @@ static int is_dir(const char *p) {
   return p && *p && stat(p, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-/* ------------------------------------------------------------------------ */
-/* Sessions                                                                 */
-/* ------------------------------------------------------------------------ */
-
-static void set_winsize(int fd, int cols, int rows) {
-  struct winsize ws = {0};
-  ws.ws_col = cols > 0 ? cols : 80;
-  ws.ws_row = rows > 0 ? rows : 24;
-  ioctl(fd, TIOCSWINSZ, &ws);
+static int exit_code(int st) {
+  if (WIFEXITED(st)) return WEXITSTATUS(st);
+  if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+  return 255;
 }
 
-static void op_session(long id, int cols, int rows, buf_t *body) {
+/* ------------------------------------------------------------------------ */
+/* Sessions (one per VT)                                                    */
+/* ------------------------------------------------------------------------ */
+
+static void op_session(long id, int vt, buf_t *body) {
   char *f[64];
   int nf = body_fields(body, f, 64);
   const char *cwd = nf > 0 ? f[0] : "";
   const char *cmd = nf > 1 ? f[1] : "";
+  if (vt < VT_FIRST || vt > VT_LAST) return reply_err(id, EINVAL);
+  for (int i = 0; i < MAX_KIDS; i++)
+    if (kids[i].kind == K_SESSION && kids[i].vt == vt) return reply_err(id, EBUSY);
   kid_t *k = kid_new();
   if (!k) return reply_err(id, EAGAIN);
-  int m = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
-  if (m < 0) return reply_err(id, errno);
-  char *sn = (grantpt(m) == 0 && unlockpt(m) == 0) ? ptsname(m) : NULL;
-  if (!sn) {
-    int e = errno;
-    close(m);
-    return reply_err(id, e ? e : ENOTTY);
-  }
-  set_winsize(m, cols, rows);
+  char dev[16];
+  snprintf(dev, sizeof dev, "/dev/tty%d", vt);
+  int h = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+  if (h < 0) return reply_err(id, errno);
   char **env = make_env(f + 2, nf > 2 ? nf - 2 : 0);
   pid_t pid = fork();
   if (pid < 0) {
     int e = errno;
-    close(m);
+    close(h);
     free(env);
     return reply_err(id, e);
   }
   if (pid == 0) {
     child_signals();
     setsid();
-    int s = open(sn, O_RDWR);
+    int s = open(dev, O_RDWR); /* first tty opened by a session leader: ctty */
     if (s < 0) _exit(126);
     ioctl(s, TIOCSCTTY, 0);
+    if (vt_have_sane[vt]) tcsetattr(s, TCSANOW, &vt_sane[vt]); /* undo a crashed raw-mode app */
     dup2(s, 0);
     dup2(s, 1);
     dup2(s, 2);
-    if (s > 2) close(s);
+    child_close_fds();
+    tcsetpgrp(0, getpid());
     if (!is_dir(cwd) || chdir(cwd) != 0) {
       if (*cwd) dprintf(2, "qos: %s: no such directory, starting in %s\r\n", cwd, HOME);
-      if (chdir(HOME) != 0) chdir("/");
+      if (chdir(HOME) != 0 && chdir("/") != 0) _exit(126);
     }
     if (*cmd) {
       char *argv[] = {"bash", "-lc", (char *)cmd, NULL};
@@ -449,73 +473,33 @@ static void op_session(long id, int cols, int rows, buf_t *body) {
     _exit(127);
   }
   free(env);
-  fcntl(m, F_SETFL, O_NONBLOCK);
   k->kind = K_SESSION;
   k->id = id;
   k->pid = pid;
-  k->fd = m;
+  k->fd = h;
+  k->vt = vt;
   k->alive = 1;
   reply_ok(id, pid);
 }
 
-/* Linux resize semantics: the foreground process group gets SIGWINCH. */
-static void op_resize(long id, int cols, int rows) {
+/* Ctrl-C: CheerpX turns VINTR into SIGINT only in canonical mode. With ISIG
+ * set in non-canonical mode (readline, the Python REPL, less, top) we raise
+ * SIGINT ourselves; otherwise the page writes the byte as usual. */
+static void op_interrupt(long id) {
   kid_t *k = kid_find(id);
-  if (!k || k->kind != K_SESSION || k->fd < 0) return;
-  set_winsize(k->fd, cols, rows);
-  pid_t fg = tcgetpgrp(k->fd);
-  if (fg <= 0 || !signal_group(fg, 0, SIGWINCH)) kill(k->pid, SIGWINCH);
-}
-
-static void session_write_pending(kid_t *k) {
-  while (k->pend.len) {
-    ssize_t w = write(k->fd, k->pend.p, k->pend.len);
-    if (w > 0) {
-      memmove(k->pend.p, k->pend.p + w, k->pend.len - w);
-      k->pend.len -= w;
-    } else if (w < 0 && errno == EINTR) {
-      continue;
-    } else {
-      break; /* EAGAIN: wait for POLLOUT */
-    }
-  }
-}
-
-/* Input for a session. The interrupt character is turned into SIGINT for the
- * foreground process group when ISIG is on (CheerpX only does this itself in
- * canonical mode, so readline / Python REPL / less would never see it). */
-static void op_input(long id, const unsigned char *d, size_t n) {
-  kid_t *k = kid_find(id);
-  if (!k || k->kind != K_SESSION || k->fd < 0 || !k->alive) return;
   struct termios t;
-  int isig = tcgetattr(k->fd, &t) == 0 && (t.c_lflag & ISIG);
-  size_t start = 0;
-  for (size_t i = 0; isig && i < n; i++) {
-    if (d[i] != t.c_cc[VINTR] || !t.c_cc[VINTR]) continue;
-    buf_add(&k->pend, d + start, i - start);
-    start = i + 1;
-    session_write_pending(k);
-    k->pend.len = 0; /* like the tty, discard input queued before ^C */
-    if ((t.c_lflag & ICANON) && (t.c_lflag & ECHO) && (t.c_lflag & ECHOCTL)) {
-      frame_begin('o', id);
-      frame_b64("^C", 2);
-      frame_end();
-    }
-    pid_t fg = tcgetpgrp(k->fd);
-    if (fg <= 0 || !signal_group(fg, 0, SIGINT)) kill(k->pid, SIGINT);
-  }
-  buf_add(&k->pend, d + start, n - start);
-  session_write_pending(k);
+  if (!k || k->kind != K_SESSION || !k->alive || tcgetattr(k->fd, &t) != 0) return reply_ok(id, 0);
+  if (!(t.c_lflag & ISIG) || (t.c_lflag & ICANON) || t.c_cc[VINTR] != 3) return reply_ok(id, 0);
+  signal_foreground(k, SIGINT);
+  reply_ok(id, 1);
 }
 
 static void op_close(long id) {
   kid_t *k = kid_find(id);
-  if (!k) return;
-  if (k->kind == K_SESSION && k->alive) {
-    signal_group(k->pid, 1, SIGHUP);
-    kill(k->pid, SIGCONT);
-    k->kill_at = now_ms() + CLOSE_KILL_MS;
-  }
+  if (!k || k->kind != K_SESSION || !k->alive) return;
+  signal_group(k->pid, 1, SIGHUP);
+  kill(k->pid, SIGCONT);
+  k->kill_at = now_ms() + CLOSE_KILL_MS;
 }
 
 static void op_kill(long id, int sig) {
@@ -523,32 +507,6 @@ static void op_kill(long id, int sig) {
   if (!k || !k->alive) return;
   if (sig <= 0 || sig >= NSIG) sig = SIGTERM;
   signal_group(k->pid, 1, sig);
-}
-
-/* Reads available output of a session/exec into frames. Returns 0 on EOF. */
-static int drain(kid_t *k, size_t budget) {
-  static unsigned char rb[READ_BUDGET];
-  size_t got = 0;
-  while (k->fd >= 0 && got < budget) {
-    ssize_t r = read(k->fd, rb, sizeof rb < budget - got ? sizeof rb : budget - got);
-    if (r > 0) {
-      frames(k->kind == K_SESSION ? 'o' : 'd', k->id, rb, r);
-      got += r;
-    } else if (r < 0 && errno == EINTR) {
-      continue;
-    } else if (r < 0 && errno == EAGAIN) {
-      return 1;
-    } else {
-      return 0; /* EOF or EIO */
-    }
-  }
-  return 1;
-}
-
-static int exit_code(int st) {
-  if (WIFEXITED(st)) return WEXITSTATUS(st);
-  if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
-  return 255;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -581,6 +539,7 @@ static void op_exec(long id, buf_t *body) {
     dup2(dn >= 0 ? dn : p[1], 0);
     dup2(p[1], 1);
     dup2(p[1], 2);
+    child_close_fds();
     if (chdir(cwd) != 0) _exit(126);
     char *argv[] = {"sh", "-c", (char *)cmd, NULL};
     execve("/bin/sh", argv, env);
@@ -597,6 +556,26 @@ static void op_exec(long id, buf_t *body) {
   k->alive = 1;
 }
 
+/* Reads available exec output into 'd' frames. Returns 0 on EOF. */
+static int drain_exec(kid_t *k, size_t budget) {
+  static unsigned char rb[READ_BUDGET];
+  size_t got = 0;
+  while (k->fd >= 0 && got < budget) {
+    ssize_t r = read(k->fd, rb, sizeof rb < budget - got ? sizeof rb : budget - got);
+    if (r > 0) {
+      data_frames(k->id, rb, r);
+      got += r;
+    } else if (r < 0 && errno == EINTR) {
+      continue;
+    } else if (r < 0 && errno == EAGAIN) {
+      return 1;
+    } else {
+      return 0; /* EOF or error */
+    }
+  }
+  return 1;
+}
+
 /* ------------------------------------------------------------------------ */
 /* Filesystem operations                                                    */
 /* ------------------------------------------------------------------------ */
@@ -605,23 +584,29 @@ static char type_char(mode_t m) {
   return S_ISREG(m) ? 'f' : S_ISDIR(m) ? 'd' : S_ISLNK(m) ? 'l' : 'o';
 }
 
-/* Appends "type/size/mtime/mode/name\0" for `name` inside directory fd. */
-static int add_record(buf_t *b, int dirfd, const char *name, const char *label) {
-  struct stat st, ts;
-  if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return -1;
-  char t[3] = {type_char(st.st_mode), 0, 0};
-  if (t[0] == 'l')
-    t[1] = fstatat(dirfd, name, &ts, 0) == 0 ? type_char(ts.st_mode) : '-';
-  long long ms = (long long)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
+static int add_stat(buf_t *b, const struct stat *st, const char *t, const char *label) {
+  long long ms = (long long)st->st_mtim.tv_sec * 1000 + st->st_mtim.tv_nsec / 1000000;
   char head[96];
-  int n = snprintf(head, sizeof head, "%s/%lld/%lld/%o/", t, (long long)st.st_size, ms,
-                   (unsigned)(st.st_mode & 07777));
+  int n = snprintf(head, sizeof head, "%s/%lld/%lld/%o/", t, (long long)st->st_size, ms,
+                   (unsigned)(st->st_mode & 07777));
   buf_add(b, head, n);
   buf_add(b, label, strlen(label) + 1);
   return 0;
 }
 
+/* Appends "type/size/mtime/mode/name\0" for `name` relative to dirfd. */
+static int add_record(buf_t *b, int dirfd, const char *name, const char *label) {
+  struct stat st, ts;
+  if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return -1;
+  char t[3] = {type_char(st.st_mode), 0, 0};
+  if (t[0] == 'l') t[1] = fstatat(dirfd, name, &ts, 0) == 0 ? type_char(ts.st_mode) : '-';
+  return add_stat(b, &st, t, label);
+}
+
 static void op_ls(long id, const char *path) {
+  struct stat st;
+  if (stat(path, &st) != 0) return reply_err(id, errno);
+  if (!S_ISDIR(st.st_mode)) return reply_err(id, ENOTDIR); /* CheerpX opendir()s files */
   DIR *d = opendir(path);
   if (!d) return reply_err(id, errno);
   buf_t b = {0};
@@ -633,23 +618,20 @@ static void op_ls(long id, const char *path) {
     if (add_record(&b, dirfd(d), n, n) == 0) count++;
   }
   closedir(d);
-  frames('d', id, b.p, b.len);
+  data_frames(id, b.p, b.len);
   buf_free(&b);
   reply_ok(id, count);
 }
 
+/* Like stat(2): describes what a symlink points to, unless it dangles. */
 static void op_stat(long id, const char *path) {
   buf_t b = {0};
-  if (add_record(&b, AT_FDCWD, path, "") != 0) return reply_err(id, errno);
-  /* Like stat(2): report what a symlink points to, unless it dangles. */
   struct stat st;
-  if (b.p[0] == 'l' && b.p[1] != '-' && stat(path, &st) == 0) {
-    long long ms = (long long)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
-    char rec[96];
-    int n = snprintf(rec, sizeof rec, "%c/%lld/%lld/%o/", type_char(st.st_mode),
-                     (long long)st.st_size, ms, (unsigned)(st.st_mode & 07777));
-    b.len = 0;
-    buf_add(&b, rec, n);
+  if (stat(path, &st) == 0) {
+    char t[2] = {type_char(st.st_mode), 0};
+    add_stat(&b, &st, t, "");
+  } else if (add_record(&b, AT_FDCWD, path, "") != 0) {
+    return reply_err(id, errno);
   }
   reply(id, 0, 0, b.p, b.len);
   buf_free(&b);
@@ -657,13 +639,14 @@ static void op_stat(long id, const char *path) {
 
 static void op_read(long id, const char *path) {
   if (nrjobs >= MAX_RJOBS) return reply_err(id, EAGAIN);
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
   if (fd < 0) return reply_err(id, errno);
   struct stat st;
   if (fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) {
     close(fd);
     return reply_err(id, EISDIR);
   }
+  fcntl(fd, F_SETFL, 0);
   rjobs[nrjobs++] = (rjob_t){id, fd, 0};
 }
 
@@ -674,7 +657,7 @@ static int pump_reads(void) {
     rjob_t *j = &rjobs[i];
     ssize_t r = read(j->fd, rb, sizeof rb);
     if (r > 0) {
-      frames('d', j->id, rb, r);
+      data_frames(j->id, rb, r);
       j->total += r;
       i++;
       continue;
@@ -701,7 +684,7 @@ static int write_all(int fd, const char *p, size_t n) {
 
 static void op_write(long id, int append, buf_t *body) {
   size_t pl = strnlen(body->p, body->len);
-  if (pl == 0 || pl >= body->len) return reply_err(id, EINVAL);
+  if (pl == 0 || pl + 2 > body->len) return reply_err(id, EINVAL);
   const char *data = body->p + pl + 1;
   size_t n = body->len - pl - 2; /* minus path NUL and the dispatcher's NUL */
   int fd = open(body->p, O_WRONLY | O_CREAT | O_CLOEXEC | (append ? O_APPEND : O_TRUNC), 0644);
@@ -798,32 +781,21 @@ static void dispatch(char *s, size_t n) {
   if (id <= 0) return;
 
   /* Number of numeric arguments after the id, per request type. */
-  int nnum;
-  switch (t) {
-    case 'S': case 'Z': nnum = 2; break;
-    case 'K': case 'W': nnum = 1; break;
-    default: nnum = 0;
-  }
-  long num[2] = {0, 0};
-  for (int i = 0; i < nnum && 2 + i < nt; i++) num[i] = strtol(tok[2 + i], NULL, 10);
+  int nnum = (t == 'S' || t == 'K' || t == 'W') ? 1 : 0;
+  long num = nnum && nt > 2 ? strtol(tok[2], NULL, 10) : 0;
   char *b64 = nt > 2 + nnum ? tok[2 + nnum] : NULL;
   size_t b64len = b64 ? strlen(b64) : 0;
 
-  if (t == 'I') { /* hot path: keystrokes, no body bookkeeping */
-    unsigned char tmp[4096];
-    unsigned char *d = b64len / 4 * 3 + 3 <= sizeof tmp ? tmp : malloc(b64len / 4 * 3 + 3);
-    size_t k = b64_dec(d, b64 ? b64 : "", b64len);
-    op_input(id, d, k);
-    if (d != tmp) free(d);
-    return;
+  switch (t) { /* requests without a body */
+    case 'Z': { kid_t *k = kid_find(id); if (k && k->kind == K_SESSION && k->alive) signal_foreground(k, SIGWINCH); return; }
+    case 'Y': return op_interrupt(id);
+    case 'C': return op_close(id);
+    case 'K': return op_kill(id, num);
+    case 'Q': return reply_ok(id, 0);
   }
-  if (t == 'Z') return op_resize(id, num[0], num[1]);
-  if (t == 'C') return op_close(id);
-  if (t == 'K') return op_kill(id, num[0]);
-  if (t == 'Q') return reply_ok(id, 0);
 
   /* Everything else carries a body: collect it (plus the inline piece). */
-  buf_t *b = body_get(id, 1);
+  buf_t *b = body_get(id);
   if (!b) return reply_err(id, EAGAIN);
   if (b64len) {
     buf_reserve(b, b64len / 4 * 3 + 3);
@@ -833,15 +805,14 @@ static void dispatch(char *s, size_t n) {
   buf_add(b, "", 1); /* NUL-terminate the last field */
 
   char *f[2] = {"", ""};
-  int nf = body_fields(b, f, 2);
-  (void)nf;
+  body_fields(b, f, 2);
   switch (t) {
-    case 'S': op_session(id, num[0], num[1], b); break;
+    case 'S': op_session(id, num, b); break;
     case 'X': op_exec(id, b); break;
     case 'L': op_ls(id, f[0]); break;
     case 'T': op_stat(id, f[0]); break;
     case 'R': op_read(id, f[0]); break;
-    case 'W': op_write(id, num[0], b); break;
+    case 'W': op_write(id, num, b); break;
     case 'F': op_copy(id, f[0], f[1]); break;
     case 'M':
       if (!*f[0]) reply_err(id, EINVAL);
@@ -875,7 +846,7 @@ static void feed_input(buf_t *in) {
     if (stx) {
       size_t off = stx + 1 - line;
       size_t fl = ln - off;
-      while (fl && (line[off + fl - 1] == '\r')) fl--;
+      while (fl && line[off + fl - 1] == '\r') fl--;
       dispatch(line + off, fl);
     }
     start += ln + 1;
@@ -907,13 +878,11 @@ static void reap(void) {
   }
 }
 
-int main(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
+int main(void) {
   b64_init();
   for (int i = 0; i < MAX_KIDS; i++) kids[i].fd = -1;
   umask(022);
-  if (chdir(HOME) != 0) chdir("/");
+  if (chdir(HOME) != 0 && chdir("/") != 0) return 2;
 
   /* Raw console: no echo, no CR/LF translation, no signals. The protocol is
    * designed to survive a cooked console too, this just makes it cheaper. */
@@ -924,9 +893,17 @@ int main(int argc, char **argv) {
     t.c_cc[VTIME] = 0;
     tcsetattr(0, TCSANOW, &t);
   }
-  if (tcgetattr(1, &t) == 0 && (t.c_oflag & OPOST)) {
-    t.c_oflag &= ~OPOST;
-    tcsetattr(1, TCSANOW, &t);
+  fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
+
+  /* Remember each VT's pristine settings so sessions start sane. */
+  for (int vt = VT_FIRST; vt <= VT_LAST; vt++) {
+    char dev[16];
+    snprintf(dev, sizeof dev, "/dev/tty%d", vt);
+    int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+    if (fd >= 0) {
+      vt_have_sane[vt] = tcgetattr(fd, &vt_sane[vt]) == 0 && (vt_sane[vt].c_lflag & ICANON);
+      close(fd);
+    }
   }
 
   signal(SIGPIPE, SIG_IGN);
@@ -951,10 +928,12 @@ int main(int argc, char **argv) {
 
   buf_t in = {0};
   struct pollfd pfd[2 + MAX_KIDS];
-  kid_t *pk[2 + MAX_KIDS];
 
   for (;;) {
-    /* Build the poll set and work out how long we may sleep. */
+    /* Poll the console, the SIGCHLD pipe and exec pipes; work out how long
+     * we may sleep. Exec pipes are also re-read on a short timer because
+     * CheerpX's poll() does not always report data that arrived while we
+     * were not sleeping in poll(). */
     int np = 0;
     pfd[np++] = (struct pollfd){0, POLLIN, 0};
     pfd[np++] = (struct pollfd){sigpipe_fds[0], POLLIN, 0};
@@ -964,17 +943,19 @@ int main(int argc, char **argv) {
       kid_t *k = &kids[i];
       if (k->kind == K_FREE) continue;
       if (k->alive) alive = 1;
-      if (k->fd >= 0) {
-        pk[np] = k;
-        pfd[np++] = (struct pollfd){k->fd, POLLIN | (k->pend.len ? POLLOUT : 0), 0};
+      int due_ms = -1;
+      if (k->kind == K_EXEC && k->fd >= 0) {
+        pfd[np++] = (struct pollfd){k->fd, POLLIN, 0};
+        due_ms = EXEC_POLL_MS;
       }
-      double due = 0;
-      if (k->kind == K_EXEC && !k->alive) due = k->reaped_at + EXEC_GRACE_MS;
-      if (k->kind == K_SESSION && k->alive && k->kill_at) due = k->kill_at;
-      if (due) {
-        int ms = due > now ? (int)(due - now) + 1 : 0;
-        if (timeout < 0 || ms < timeout) timeout = ms;
+      if (k->kind == K_EXEC && !k->alive) {
+        double due = k->reaped_at + EXEC_GRACE_MS;
+        due_ms = due > now ? (int)(due - now) + 1 : 0;
       }
+      if (k->kind == K_SESSION && k->alive && k->kill_at) {
+        due_ms = k->kill_at > now ? (int)(k->kill_at - now) + 1 : 0;
+      }
+      if (due_ms >= 0 && (timeout < 0 || due_ms < timeout)) timeout = due_ms;
     }
     if (nrjobs) timeout = 0;
     /* Fallback in case a SIGCHLD ever gets lost: re-check children. */
@@ -989,28 +970,26 @@ int main(int argc, char **argv) {
     }
     reap();
 
-    /* Console input. */
-    if (n > 0 && (pfd[0].revents & (POLLIN | POLLHUP | POLLERR))) {
+    /* Console input: read everything that is there (non-blocking). */
+    for (;;) {
       buf_reserve(&in, 65536);
       ssize_t r = read(0, in.p + in.len, 65536);
       if (r > 0) {
         in.len += r;
-        feed_input(&in);
-      } else if (r == 0 || (errno != EINTR && errno != EAGAIN)) {
-        _exit(0); /* console closed */
+        continue;
       }
+      if (r == 0) _exit(0); /* console closed */
+      if (errno != EINTR && errno != EAGAIN) _exit(0);
+      break;
     }
+    feed_input(&in);
 
-    /* Child output and pending pty input. */
-    for (int i = 2; n > 0 && i < np; i++) {
-      kid_t *k = pk[i];
-      if (k->kind == K_FREE || k->fd != pfd[i].fd) continue; /* freed meanwhile */
-      if (pfd[i].revents & POLLOUT) session_write_pending(k);
-      if (pfd[i].revents & (POLLIN | POLLHUP | POLLERR)) {
-        if (!drain(k, READ_BUDGET) && k->kind == K_EXEC) {
-          close(k->fd);
-          k->fd = -1;
-        }
+    /* Exec output (regardless of revents, see above). */
+    for (int i = 0; i < MAX_KIDS; i++) {
+      kid_t *k = &kids[i];
+      if (k->kind == K_EXEC && k->fd >= 0 && !drain_exec(k, READ_BUDGET)) {
+        close(k->fd);
+        k->fd = -1;
       }
     }
 
@@ -1024,15 +1003,15 @@ int main(int argc, char **argv) {
       }
       if (k->alive || k->kind == K_FREE) continue;
       if (k->kind == K_SESSION) {
-        /* A CheerpX pty master never reports EOF: the reaped leader is the
-         * end of the session. Drain what the shell wrote before exiting. */
-        drain(k, 1 << 20);
+        /* Leftover background jobs would keep writing into a VT that the
+         * next session reuses: end them with their shell. */
+        signal_group(k->pid, 1, SIGKILL);
         frame_begin('x', k->id);
         out_num(exit_code(k->status));
         frame_end();
         kid_free(k);
       } else if (k->fd < 0 || now >= k->reaped_at + EXEC_GRACE_MS) {
-        drain(k, 1 << 20);
+        drain_exec(k, 1 << 20);
         reply_ok(k->id, exit_code(k->status));
         kid_free(k);
       }
