@@ -1,0 +1,58 @@
+project:
+  type: website
+  output-dir: _site
+  # Only the docs site is rendered. dev/, agent/ and README.md are not part of it.
+  render:
+    - index.qmd
+    - examples/*.qmd
+  resources:
+    - examples/assets/
+
+website:
+  title: "Quarto OS"
+  description: "macOS-style windows, a fake desktop and a real Linux VM (terminal, VS Code, file explorer) for Quarto documents, websites and slides."
+  site-url: https://jansim.github.io/quarto-os/
+  repo-url: https://github.com/jansim/quarto-os
+  favicon: examples/assets/favicon.svg
+  page-navigation: true
+  navbar:
+    logo: examples/assets/favicon.svg
+    left:
+      - text: "Home"
+        href: index.qmd
+      - text: "Examples"
+        menu:
+          - text: "Content windows"
+            href: examples/windows.qmd
+          - text: "Terminals"
+            href: examples/terminal.qmd
+          - text: "Git lesson"
+            href: examples/git-lesson.qmd
+          - text: "Desktop"
+            href: examples/desktop.qmd
+          - text: "Slides (reveal.js)"
+            href: examples/slides.qmd
+      - text: "Reference"
+        href: index.qmd#reference
+    right:
+      - icon: github
+        href: https://github.com/jansim/quarto-os
+        aria-label: "quarto-os on GitHub"
+  page-footer:
+    left: "Quarto OS · VM powered by [CheerpX](https://cheerpx.io) — see [licensing](/index.qmd#licensing)"
+    right: "Built with [Quarto](https://quarto.org)"
+
+format:
+  html:
+    theme:
+      - cosmo
+      - theme.scss
+    css: styles.css
+    toc: true
+    toc-depth: 3
+    code-copy: true
+    highlight-style: github
+    smooth-scroll: true
+
+filters:
+  - quarto-os

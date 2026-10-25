@@ -1,0 +1,40 @@
+/*-- scss:defaults --*/
+
+// No web fonts: pages that use the VM are cross-origin isolated (COEP), and a
+// system font stack keeps the site fast and free of third-party requests.
+$web-font-path: false;
+$font-family-sans-serif: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+$font-family-monospace: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+$primary: #2f6fde;
+$secondary: #6c757d;
+$body-color: #1d2330;
+$link-color: #2563c9;
+$border-radius: .5rem;
+
+$navbar-bg: #ffffff;
+$navbar-fg: #1d2330;
+$navbar-hl: $primary;
+
+$footer-bg: #f6f7fb;
+$footer-fg: #5b6474;
+
+$code-color: #b4325b;
+$code-block-bg: #f6f8fa;
+
+/*-- scss:rules --*/
+
+.navbar {
+  border-bottom: 1px solid rgba(0, 0, 0, .07);
+  box-shadow: 0 1px 12px rgba(20, 30, 60, .04);
+}
+
+.navbar-brand .navbar-title {
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+
+h1, h2, h3, h4 {
+  letter-spacing: -.015em;
+  font-weight: 700;
+}

@@ -1,0 +1,152 @@
+---
+title: "Desktop"
+subtitle: "A fake desktop with wallpaper, menubar and dock — launch as many windows as you like."
+quarto-os:
+  vm:
+    setup: |
+      mkdir -p ~/lab3
+      cd ~/lab3
+      printf '# Lab 3 — pipes\n\nCount the words in poem.txt, then find the longest line.\n' > TASK.md
+      printf 'Roses are red,\nviolets are blue,\nbash pipes are neat,\nand so are you.\n' > poem.txt
+---
+
+A desktop is a fenced div with the class `.os-desktop`. It draws a wallpaper, a menubar
+and a dock; windows nested inside it float at their `x`/`y` position, can be dragged,
+minimized, maximized and closed.
+
+## A first desktop {#first}
+
+````markdown
+::: {#demo .os-desktop height="460px"}
+
+::: {.os-window title="Read me" x=24 y=24 width=330 height=230}
+Click the icons in the **dock** …
+:::
+
+::: {.os-window title="sunset.svg" x=390 y=60 width=360}
+![](assets/sunset.svg)
+:::
+
+:::
+````
+
+::: {#demo .os-desktop height="460px"}
+
+::: {.os-window title="Read me" x=24 y=24 width=330 height=230}
+#### Hello, desktop!
+
+Click the icons in the **dock** below. Every click opens a **new instance** — open three
+terminals if you like. All of them share one Linux VM.
+:::
+
+::: {.os-window title="sunset.svg" x=390 y=60 width=360}
+![](assets/sunset.svg){fig-alt="Illustration of a sunset over hills"}
+:::
+
+:::
+
+The dock shows `terminal,vscode,explorer` by default; choose your own with
+`dock="terminal,explorer"` (or `dock=""` for none). The VM only boots when the first VM
+app is opened, so a desktop with just content windows costs nothing.
+
+## Launch buttons {#launchers}
+
+A span with the class `.os-launch` becomes a button that opens a new window. With
+`target="demo"` the windows open on the desktop above; any window attribute can be
+passed along:
+
+::: {.launch-row}
+[New terminal]{.os-launch app="terminal" target="demo" cwd="~/lab3"}
+[Terminal running `ls -l`]{.os-launch app="terminal" target="demo" cwd="~/lab3" run="ls -l" title="ls"}
+[VS Code]{.os-launch app="vscode" target="demo" folder="~/lab3" open="TASK.md"}
+[Explorer]{.os-launch app="explorer" target="demo" path="~/lab3"}
+[Browser]{.os-launch app="browser" target="demo" url="windows.html" title="Content windows"}
+:::
+
+```markdown
+[New terminal]{.os-launch app="terminal" target="demo" cwd="~/lab3"}
+[VS Code]{.os-launch app="vscode" target="demo" folder="~/lab3" open="TASK.md"}
+[Explorer]{.os-launch app="explorer" target="demo" path="~/lab3"}
+[Browser]{.os-launch app="browser" target="demo" url="windows.html"}
+```
+
+::: {.callout-note}
+The `browser` app shows a page in an iframe. On pages that use the VM, only same-origin
+pages (like another page of your site) and sites that allow cross-origin embedding
+load — see [Limitations](../index.qmd#limitations).
+:::
+
+## Wallpaper, menubar & window states {#custom}
+
+Set a `wallpaper` image, the app name shown in the `title` of the menubar, and pick the
+dock icons. Windows can start `minimized` or `maximized` with `state`:
+
+````markdown
+::: {.os-desktop height="420px" title="Lab 3" wallpaper="assets/wallpaper.svg" dock="terminal,explorer"}
+
+::: {.os-window app="terminal" x=30 y=30 width=520 height=260 cwd="~/lab3" run="cat TASK.md" theme="dark"}
+:::
+
+::: {.os-window title="Hint" state="minimized" x=420 y=120 width=300}
+Try `wc -w poem.txt` and `awk '{ print length, $0 }' poem.txt | sort -n | tail -1`.
+:::
+
+:::
+````
+
+::: {#lab .os-desktop height="420px" title="Lab 3" wallpaper="assets/wallpaper.svg" dock="terminal,explorer"}
+
+::: {.os-window app="terminal" title="bash — lab3" x=30 y=30 width=520 height=260 cwd="~/lab3" run="cat TASK.md" theme="dark"}
+:::
+
+::: {.os-window title="Hint" state="minimized" x=420 y=120 width=320}
+Try `wc -w poem.txt` and
+
+`awk '{ print length, $0 }' poem.txt | sort -n | tail -1`
+:::
+
+:::
+
+The *Hint* window starts minimized — restore it from the dock when a student is stuck.
+
+## A full-height student workspace {#workspace}
+
+For labs and exercises, give students a whole screen: a desktop that fills the window
+(`height="calc(100vh - 120px)"`, page-wide with Quarto's `.column-screen-inset`) with
+VS Code, a terminal and the Explorer already open.
+
+````markdown
+::: {.column-screen-inset}
+::: {#workspace .os-desktop height="calc(100vh - 120px)" title="Workspace"}
+
+::: {.os-window app="vscode" x=16 y=16 width=660 height=540 folder="~/lab3" open="TASK.md,poem.txt"}
+:::
+
+::: {.os-window app="terminal" x=692 y=16 width=520 height=300 cwd="~/lab3"}
+:::
+
+::: {.os-window app="explorer" x=692 y=332 width=520 height=224 path="~/lab3"}
+:::
+
+:::
+:::
+````
+
+::: {.column-screen-inset .workspace-full}
+::: {#workspace .os-desktop height="calc(100vh - 120px)" title="Workspace"}
+
+::: {.os-window app="vscode" title="lab3 — VS Code" x=16 y=16 width=660 height=540 folder="~/lab3" open="TASK.md,poem.txt"}
+:::
+
+::: {.os-window app="terminal" title="bash — lab3" x=692 y=16 width=520 height=300 cwd="~/lab3"}
+:::
+
+::: {.os-window app="explorer" title="lab3" x=692 y=332 width=520 height=224 path="~/lab3"}
+:::
+
+:::
+:::
+
+Everything on this page — the three desktops, every terminal, editor and explorer —
+runs on the **same** VM: a file saved in the workspace's VS Code shows up in the Lab 3
+terminal above.

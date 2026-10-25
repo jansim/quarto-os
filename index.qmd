@@ -1,0 +1,490 @@
+---
+title: "Quarto OS"
+pagetitle: "Quarto OS — windows, desktops and a real Linux VM for Quarto"
+description: "A Quarto extension that renders macOS-style windows, a fake desktop and a real Linux VM (terminal, VS Code, file explorer) right inside your documents, websites and slides."
+toc-title: "On this page"
+---
+
+::::::: {.hero}
+
+```{=html}
+<style>#title-block-header { display: none; }</style>
+```
+
+:::: {.hero-text}
+```{=html}
+<h1 class="hero-title">Quarto OS</h1>
+```
+
+[A Quarto extension that puts **windows**, a **desktop** and a **real Linux machine** into your
+documents, websites and reveal.js slides — built for teaching.]{.tagline}
+
+::: {.hero-buttons}
+[quarto add jansim/quarto-os]{.install-chip}
+[Get started](#install){.btn .btn-primary}
+[See the examples](#examples){.btn .btn-outline-primary}
+[GitHub](https://github.com/jansim/quarto-os){.btn .btn-outline-secondary}
+:::
+::::
+
+::::: {.hero-stage}
+:::: {.hero-stage-inner}
+
+::: {.os-window title="hello.py" float=true x=26 y=26 width=380 theme="dark"}
+```python
+from pathlib import Path
+
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+for f in sorted(Path(".").glob("*.qmd")):
+    print(greet(f.stem))
+```
+:::
+
+::: {.os-window title="sunset.svg" float=true x=350 y=64 width=400}
+![](examples/assets/sunset.svg){fig-alt="Illustration of a sunset over hills"}
+:::
+
+::: {.os-window title="Terminal — zsh" float=true x=120 y=286 width=380 theme="dark"}
+```bash
+$ quarto add jansim/quarto-os
+$ quarto preview lesson.qmd
+```
+:::
+
+::::
+:::::
+
+```{=html}
+<script>
+  // Scale the 800px-wide hero stage down on narrow screens.
+  (function () {
+    var stage = document.querySelector('.hero-stage');
+    if (!stage || !window.ResizeObserver) return;
+    new ResizeObserver(function () {
+      stage.style.setProperty('--stage-scale', Math.min(1, stage.clientWidth / 800));
+    }).observe(stage);
+  })();
+</script>
+```
+
+::::::
+
+**Quarto OS** renders macOS-style windows — title bar with traffic lights, rounded
+corners, soft shadows — around anything you write in Markdown: images, videos, code,
+callouts. And it ships *apps*: a **terminal**, a **VS Code**-like editor and a
+**Finder**-like file explorer, all connected to **one real Linux VM running in the
+reader's browser**. No server, no accounts, nothing to install for your students.
+
+The windows above are plain Markdown and you can drag them around by their title bars.
+
+::: {.feature-grid}
+
+::: {.feature}
+### Windows for any content
+Wrap images, video, code blocks or callouts in a window. Inline, side by side, or
+floating and draggable.
+:::
+
+::: {.feature}
+### A real terminal
+`bash` in a Debian VM powered by [CheerpX](https://cheerpx.io). `git`, `python3`,
+`vim` and friends just work — offline, in the browser.
+:::
+
+::: {.feature}
+### VS Code & Explorer
+A Monaco-based editor and a file explorer that show the *same* files your terminal
+just changed — including hidden ones like `.git`.
+:::
+
+::: {.feature}
+### Desktops, docks & slides
+A fake desktop with menubar and dock, launch buttons, clickable run snippets and
+full reveal.js support.
+:::
+
+:::
+
+## Try it {#try-it}
+
+This is a small desktop. Drag the windows, then click an icon in the dock to open a
+terminal, the editor or the file explorer. The first VM app you open boots a Debian VM
+in your browser (it downloads a few megabytes on the first visit), every further app
+attaches to the same machine.
+
+::: {.os-desktop #home-desk height="440px" title="Quarto OS"}
+
+::: {.os-window title="Welcome.md" x=28 y=24 width=360 height=270}
+**Welcome!** This desktop is written in Markdown. Try to:
+
+- **drag** a window by its title bar,
+- click the **dock** to open a terminal, VS Code or the explorer,
+- open **several** terminals — they all share one VM.
+:::
+
+::: {.os-window title="flow-field.jpg" x=410 y=56 width=360}
+![](examples/assets/flow-field.jpg){fig-alt="Generative flow-field artwork"}
+:::
+
+:::
+
+[New terminal]{.os-launch app="terminal" target="home-desk" cwd="~"}
+[Open VS Code]{.os-launch app="vscode" target="home-desk" folder="~"}
+[Open Explorer]{.os-launch app="explorer" target="home-desk" path="~"}
+
+## Examples {#examples}
+
+::: {.example-cards}
+
+::: {.example-card}
+[Content windows](examples/windows.qmd)
+
+Images, video, code in many languages, callouts, side-by-side and floating windows,
+light & dark chrome.
+:::
+
+::: {.example-card}
+[Terminals](examples/terminal.qmd)
+
+Terminal windows, `cwd` and `run`, two terminals on one VM and clickable
+`.os-run` snippets.
+:::
+
+::: {.example-card}
+[Git lesson](examples/git-lesson.qmd)
+
+A complete instructor-style lesson: terminal, Explorer (with `.git`) and VS Code side
+by side.
+:::
+
+::: {.example-card}
+[Desktop](examples/desktop.qmd)
+
+Dock, multiple instances, launch buttons and a full-height student workspace.
+:::
+
+::: {.example-card}
+[Slides](examples/slides.qmd)
+
+A reveal.js deck with windows, floating windows, a live terminal and a git demo.
+:::
+
+:::
+
+## Install {#install}
+
+Quarto OS is a Quarto filter extension. In your project directory run:
+
+```bash
+quarto add jansim/quarto-os
+```
+
+This installs the extension into `_extensions/quarto-os/` (commit that folder with
+your project). Then enable the filter, either for a single document or for a whole
+project in `_quarto.yml`:
+
+```yaml
+filters:
+  - quarto-os
+```
+
+It works with `format: html` (documents and websites) and `format: revealjs`.
+
+## Quick start {#quick-start}
+
+````markdown
+---
+title: "My first lesson"
+filters:
+  - quarto-os
+---
+
+::: {.os-window title="hello.py"}
+```python
+print("Hello from a window!")
+```
+:::
+
+::: {#shell .os-window app="terminal" height="300px"}
+:::
+
+Click to run it: `python3 -c 'print("Hello from Linux!")'`{.os-run target="shell"}
+````
+
+Render or preview as usual (`quarto preview my-lesson.qmd`). The first window is pure
+HTML/CSS. The second one is a real terminal: the page lazily loads the VM, boots
+Debian and starts `bash`. Clicking the snippet types the command into the terminal and
+presses <kbd>Enter</kbd>.
+
+::: {.callout-tip}
+## Previewing locally
+The VM needs a *cross-origin isolated* page. `quarto preview` doesn't send the required
+headers, so Quarto OS registers a small service worker that adds them and reloads the
+page once. Everything else is automatic — see [Limitations](#limitations).
+:::
+
+## Reference {#reference}
+
+### Windows
+
+A window is a fenced div with the class `.os-window`. Everything inside it is regular
+Markdown and becomes the window's content:
+
+````markdown
+::: {.os-window title="cat.jpg" width="420px" height="300px"}
+![](cat.jpg)
+:::
+
+::: {.os-window title="hello.py"}
+```python
+print("hi")
+```
+:::
+````
+
+With an `app` attribute the window becomes an application instead (the div is left
+empty). Every app can also be written as an `os` shortcode, which is handy inline or in
+slides:
+
+````markdown
+::: {#t1 .os-window app="terminal" height="320px" cwd="~/repo" run="git status"}
+:::
+
+{{{< os terminal title="bash" height="300px" >}}}
+{{{< os vscode folder="~/repo" open="README.md" >}}}
+{{{< os explorer path="~" >}}}
+{{{< os browser url="https://quarto.org" >}}}
+````
+
+#### Window attributes
+
+All attributes are optional.
+
+| Attribute | Meaning |
+|----------|------------------------------------------|
+| `app` | `content` (default; wraps the div's Markdown), `terminal`, `vscode`, `explorer` or `browser` |
+| `title` | Title bar text (default: the app's name) |
+| `width`, `height` | Any CSS length (`420px`, `60%`, `50vh`); bare numbers mean pixels |
+| `x`, `y` | Position in pixels when the window floats (inside a desktop, a slide, or with `float=true`) |
+| `float` | `true` → absolutely positioned and draggable over its container instead of in the text flow |
+| `#id` | An id, e.g. `{#t1 .os-window …}`; used as `target` by run snippets and launchers |
+| `theme` | `light` or `dark` window chrome (default from the document option `quarto-os: theme`) |
+| `state` | `normal`, `minimized` or `maximized` (inside a desktop) |
+
+#### App-specific attributes
+
+| App | Attribute | Meaning |
+|----------|----------|------------------------------------|
+| `terminal` | `cwd` | Working directory the shell starts in |
+| | `run` | Command typed after the shell has started; `;`-separated commands are fine |
+| `vscode` | `folder` | Workspace root shown in the editor's file tree |
+| | `open` | Comma-separated files (relative to `folder`) opened as tabs |
+| `explorer` | `path` | Start directory |
+| | `hidden` | Show dotfiles such as `.git` (default `true`) |
+| `browser` | `url` | Page shown in the window (see [Limitations](#limitations) for third-party sites) |
+
+Paths may start with `~`, which means the VM user's home directory `/home/user`.
+
+::: {.callout-note}
+## Floating windows
+`x` and `y` are relative to the closest positioned container. Inside a desktop or a
+reveal.js slide that's the desktop/slide; for `float=true` windows in a normal page,
+wrap them in a div with `position: relative` and a height (the examples use a small
+`.stage` class for this).
+:::
+
+### Desktop
+
+A `.os-desktop` div renders a fake desktop with wallpaper, menubar and dock. Windows
+nested inside it become floating windows on the desktop:
+
+````markdown
+::: {#desk .os-desktop height="520px" dock="terminal,vscode,explorer"}
+
+::: {.os-window app="terminal" x=40 y=40 width=520 height=300}
+:::
+
+:::
+````
+
+| Attribute | Meaning |
+|----------|------------------------------------------|
+| `#id` | Id used as `target` by launchers |
+| `height` | Desktop height (default `480px`) |
+| `dock` | Comma-separated apps shown in the dock (default `terminal,vscode,explorer`); each click opens a new instance |
+| `menubar` | `true`/`false` — show the menubar (default `true`) |
+| `title` | App name shown in the menubar |
+| `wallpaper` | Background image URL |
+
+### Launchers
+
+A span with the class `.os-launch` becomes a button. Each click opens a **new** window;
+any window attribute can be given:
+
+```markdown
+[New terminal]{.os-launch app="terminal" target="desk" cwd="~/repo"}
+[Edit the README]{.os-launch app="vscode" folder="~/repo" open="README.md"}
+```
+
+Where does the window go? With `target`, into that desktop. Without it: inside a
+reveal.js slide → floating on that slide; otherwise into the page's desktop if there is
+exactly one; otherwise floating over the page.
+
+### Run snippets
+
+Add `.os-run` to inline code or a code block to make it clickable. A click sends the
+text plus <kbd>Enter</kbd> to a terminal:
+
+````markdown
+`git status`{.os-run target="t1"}
+
+```{.bash .os-run target="t1"}
+git add README.md
+git commit -m "First commit"
+```
+````
+
+The terminal is chosen like this: the window with id `target`; otherwise the most
+recently focused terminal; otherwise a new floating terminal is opened.
+
+### Document options
+
+Options go under `quarto-os:` in the document front matter or in `_quarto.yml`. All
+are optional:
+
+```yaml
+quarto-os:
+  theme: light            # default window chrome: light | dark
+  coi: true               # register coi-serviceworker.js on pages that use the VM
+  vm:
+    disk: wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2
+    disk-type: cloud      # cloud | github | bytes
+    persist: false        # keep disk changes across reloads (IndexedDB)
+    cache-id: quarto-os   # IndexedDB name for the disk overlay
+    autoboot: false       # boot on page load instead of on the first VM window
+    setup: |              # bash script, run once per fresh VM as `user`
+      mkdir -p ~/repo
+```
+
+| Option | Default | Meaning |
+|----------|----------|------------------------------------|
+| `theme` | `light` | Default window chrome theme |
+| `coi` | `true` | Make VM pages cross-origin isolated with a service worker. Set to `false` if your server already sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` |
+| `vm.disk` | WebVM's Debian image | Disk image URL |
+| `vm.disk-type` | `cloud` | `cloud` (streamed over WebSocket), `github` (chunked image hosted with your site) or `bytes` (plain HTTP with range requests) |
+| `vm.persist` | `false` | Keep changes to the disk in IndexedDB so they survive reloads |
+| `vm.cache-id` | `quarto-os` | Name of the IndexedDB overlay — use different ids for unrelated lessons |
+| `vm.autoboot` | `false` | Boot the VM as soon as the page loads |
+| `vm.setup` | — | Shell script run once in a fresh VM before any app attaches. Perfect for `git config`, sample files and folders |
+
+### JavaScript API
+
+Everything is also scriptable from your own `<script>` tags through `window.QuartoOS`:
+
+```js
+// open a new terminal floating over the page and run a command in it
+const win = await QuartoOS.open("terminal", { cwd: "~", run: "ls -la" });
+
+// send a command to the terminal with id "t1"
+QuartoOS.run("git log --oneline", "t1");
+
+// talk to the VM directly
+const vm = await QuartoOS.vm();
+await vm.writeFile("~/notes.txt", "Hello!\n");
+const { output } = await vm.exec("wc -c notes.txt", { cwd: "~" });
+```
+
+## How the VM works {#how-it-works}
+
+**CheerpX in the browser.** The apps are backed by
+[CheerpX](https://cheerpx.io), the x86-to-WebAssembly virtualization engine by Leaning
+Technologies that also powers [WebVM](https://webvm.io). It runs an unmodified 32-bit
+**Debian** (i386) — with `bash`, `git`, `python3`, `nano`, `vim` and the usual
+command-line tools — entirely in the reader's browser. Nothing runs on a server and
+nothing a student types leaves their machine.
+
+**One VM per page.** All terminals, editors and explorers on a page talk to the *same*
+machine. A file created in one terminal immediately shows up in the explorer and in
+VS Code; a commit made in the terminal shows up in the editor's source control. A tiny
+agent inside the VM (`qos-agent`, a 48 KB static C binary) serves the file operations
+and starts the shells; each terminal runs on its own CheerpX virtual console, so
+keystrokes go straight to `bash` without any extra hop.
+
+**Streaming disk.** The disk image is not downloaded up front: CheerpX fetches only the
+blocks that are actually read and caches them in the browser, so the first boot takes
+a few seconds longer and later visits are fast. Changes are kept in memory and vanish
+on reload, unless `vm.persist: true` stores them in IndexedDB.
+
+**Lazy loading.** Every page only loads the small core (`quarto-os.js` +
+`quarto-os.css`, about 60 KB before compression). The heavy parts — xterm.js for terminals, Monaco
+(the editor of VS Code) for the editor, CheerpX and the VM layer — are loaded the
+first time a window needs them, e.g. when a terminal scrolls into view or someone
+clicks a dock icon. Pages with only content windows never download any of it.
+
+**Cross-origin isolation.** CheerpX needs `SharedArrayBuffer`, which browsers only
+enable on *cross-origin isolated* pages. Static hosts such as GitHub Pages can't set
+the required headers, so pages that use the VM register
+[coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker), which adds them and
+reloads the page once on the first visit.
+
+## Teaching tips {#teaching-tips}
+
+- **Prepare the machine with `vm.setup`.** Configure `git` identities (the default is
+  `Student <student@example.com>`, so commits work out of the box), create folders
+  and starter files so every student starts from exactly the same state. A reload gives
+  everyone a fresh, clean machine (unless you enable `persist`).
+- **Make the invisible visible.** Put a terminal next to an Explorer with hidden files
+  shown: students *see* `.git` appear after `git init` and files vanish when they switch
+  branches. The [git lesson](examples/git-lesson.qmd) is built around this.
+- **Click first, type later.** `.os-run` snippets let beginners follow along without
+  typos. Encourage them to type the next commands themselves — it's a real shell.
+- **Name your terminals.** With several terminals on a page, give each an `#id` and
+  use `target` so snippets end up in the right one.
+- **Warm up before class.** Open the page once before the lecture so the VM engine and
+  disk blocks are cached; for talks consider `autoboot: true` on the slide deck.
+- **Have a fallback.** Keep a screenshot or recording handy for classroom machines with
+  old or locked-down browsers.
+
+## Limitations {#limitations}
+
+- **One reload on first visit.** Pages that use the VM are made cross-origin isolated by
+  a service worker, which needs one automatic reload the first time a page is opened.
+  Serving your site with the COOP/COEP headers yourself avoids it (`coi: false`).
+- **No third-party iframes on VM pages.** Under COEP, embeds like YouTube videos, maps
+  or other sites' pages (including the `browser` app pointing at them) are blocked on
+  pages that use the VM. Self-host such media or put it on a page without VM apps.
+  Pages with only content windows are not affected.
+- **At most six terminals at once.** CheerpX provides six virtual consoles, so a page
+  can have up to six terminals (including VS Code's integrated terminal) open at the
+  same time; a seventh shows a message asking to close one. Terminals in windows that
+  never scrolled into view don't count.
+- **No network inside the VM.** `apt install`, `pip install`, `curl` or `git clone`
+  from the internet don't work. Create what you need in `vm.setup`, or use a custom
+  disk image that already contains it.
+- **First boot downloads.** The VM engine and the disk blocks it touches are downloaded
+  on first use (several megabytes); afterwards they come from the browser cache.
+- **An older Debian.** The default image is Debian buster (i386): e.g. git 2.20, which
+  predates `git switch`/`git restore` — use `git checkout`.
+- **Browsers.** Recent Chromium-based browsers (Chrome, Edge, Brave…) and Firefox are
+  recommended. Other browsers and phones may work but are slower and use a lot of
+  memory.
+
+## Licensing {#licensing}
+
+Quarto OS bundles or loads several third-party components:
+
+- **CheerpX** is proprietary software by [Leaning Technologies](https://leaningtech.com).
+  It is free for personal use and for open-source projects; **commercial or
+  organizational use requires a license** from Leaning Technologies — see
+  [cheerpx.io](https://cheerpx.io). Quarto OS loads it at runtime from Leaning
+  Technologies' CDN and does not redistribute it.
+- The default disk image is a Debian system hosted by the WebVM project; the software
+  in it is under the licenses of the respective Debian packages.
+- [xterm.js](https://xtermjs.org), [Monaco Editor](https://microsoft.github.io/monaco-editor/)
+  and [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) are MIT
+  licensed.
+
+The demo images and the video on this site were generated for it and may be reused
+freely.

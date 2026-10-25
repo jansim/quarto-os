@@ -1,0 +1,20 @@
+// os.open(app, {origin: win.el}) opens next to the calling window (desktop / slide / overlay).
+import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page.on('pageerror', e => console.log('[pageerror]', e.message));
+const where = w => page.evaluate(id => { const x = document.getElementById(id).qosWin; return x.host.type + (x.desk ? ':' + x.desk.el.id : ''); }, w);
+await page.goto('http://localhost:8202/desk.html', { waitUntil: 'load' }); await page.waitForTimeout(800);
+let id = await page.evaluate(async () => (await QuartoOS.open('content', { content: 'hi', origin: document.getElementById('dt1') })).id);
+console.log('desktop window origin (el) ->', await where(id));
+id = await page.evaluate(async () => (await QuartoOS.open('content', { content: 'hi', origin: document.getElementById('dt1').qosWin })).id);
+console.log('desktop window origin (Win) ->', await where(id));
+await page.goto('http://localhost:8202/doc.html', { waitUntil: 'load' }); await page.waitForTimeout(800);
+id = await page.evaluate(async () => (await QuartoOS.open('content', { content: 'hi', origin: document.getElementById('t1') })).id);
+console.log('inline doc window origin ->', await where(id));
+id = await page.evaluate(async () => { const o = (await QuartoOS.open('content', { content: 'a', origin: document.getElementById('t1') })); return (await QuartoOS.open('content', { content: 'b', origin: o.el })).id; });
+console.log('overlay window origin ->', await where(id));
+await page.goto('http://localhost:8202/slides.html#/terminal-and-runs', { waitUntil: 'load' }); await page.waitForTimeout(1200);
+id = await page.evaluate(async () => (await QuartoOS.open('content', { content: 'hi', origin: document.getElementById('st1') })).id);
+console.log('slide window origin ->', await where(id), 'same slide:', await page.evaluate(id => document.getElementById(id).closest('section') === document.getElementById('st1').closest('section'), id));
+await browser.close();

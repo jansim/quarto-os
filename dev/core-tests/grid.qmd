@@ -1,0 +1,48 @@
+---
+title: "grid, dark, narrow"
+filters: [quarto-os]
+---
+
+::: {.grid}
+::: {.g-col-6 .os-window title="left"}
+Left cell content.
+:::
+::: {.g-col-6 .os-window title="right" theme="dark"}
+Right cell, dark, with `inline code` and a [link](#).
+:::
+:::
+
+::: {.os-window title="dark.py" theme="dark"}
+```python
+import os
+def hello(name: str) -> None:
+    # a comment
+    print(f"hi {name}", 42, True)
+```
+:::
+
+::: {.os-window title="Dark prose" theme="dark" width=520}
+## Heading
+
+Some text with `inline code`, a [link](https://quarto.org) and **bold**.
+
+| a | b |
+|---|---|
+| 1 | 2 |
+
+> A quote.
+
+```bash
+echo "code in prose" # comment
+```
+:::
+
+::: {.os-window title="sized" width=300}
+Centred, 300px.
+:::
+
+::: {.os-desktop #narrow height="320px" dock="browser"}
+::: {.os-window title="far right" x=420 y=40 width=520 height=200}
+Should stay reachable on narrow screens.
+:::
+:::

@@ -1,0 +1,7 @@
+---
+title: Plain
+---
+
+::: {.os-window title="x"}
+hello
+:::

@@ -1,0 +1,19 @@
+# Quarto
+/_site/
+/.quarto/
+*_files/
+/.luarc.json
+**/*.quarto_ipynb
+
+# Node / tooling
+node_modules/
+
+# Dev harness output
+dev/**/out/
+dev/**/*.log
+
+# Editors & OS
+.DS_Store
+.vscode/
+.idea/
+*.swp

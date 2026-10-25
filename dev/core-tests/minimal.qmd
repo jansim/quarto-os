@@ -1,0 +1,6 @@
+---
+title: "No OS stuff"
+filters: [quarto-os]
+---
+
+Just text.

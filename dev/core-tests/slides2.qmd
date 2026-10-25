@@ -1,0 +1,35 @@
+---
+title: "Headings in windows"
+format: revealjs
+filters: [quarto-os]
+---
+
+## Slide A
+
+::: {.os-window title="notes.md" width="60%"}
+## Heading inside
+
+Text.
+
+### Sub heading
+
+More text.
+:::
+
+## Slide B
+
+::: {.os-window title="floating note" x=600 y=140 width=320}
+Short content: the window should fit this text.
+:::
+
+Left text.
+
+## Slide C
+
+::: {.os-desktop height="420px" wallpaper="assets/wall.svg" dock="browser"}
+## Desktop heading
+:::
+
+## Slide D
+
+The end.

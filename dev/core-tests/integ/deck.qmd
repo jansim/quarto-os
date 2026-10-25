@@ -1,0 +1,14 @@
+---
+title: "Integration deck"
+format: revealjs
+filters: [quarto-os]
+---
+
+## Terminal slide
+
+::: {.os-window #st app="terminal" title="bash" height="420px"}
+:::
+
+## Next slide
+
+[Open a terminal here]{.os-launch app="terminal"}

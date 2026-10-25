@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="800" height="500">
+  <title>Sunset over layered hills (illustration)</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2459"/>
+      <stop offset=".45" stop-color="#7b3f8c"/>
+      <stop offset=".75" stop-color="#f0766a"/>
+      <stop offset="1" stop-color="#fcc98b"/>
+    </linearGradient>
+    <radialGradient id="sun" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#fff4c2"/>
+      <stop offset=".6" stop-color="#ffd27a"/>
+      <stop offset="1" stop-color="#ff9e5e"/>
+    </radialGradient>
+    <radialGradient id="glow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#ffd58a" stop-opacity=".75"/>
+      <stop offset="1" stop-color="#ffd58a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6a27a"/>
+      <stop offset="1" stop-color="#6a3d6b"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="500" fill="url(#sky)"/>
+  <g fill="#fff">
+    <circle cx="80" cy="60" r="1.6" opacity=".9"/><circle cx="160" cy="110" r="1.1" opacity=".7"/>
+    <circle cx="250" cy="45" r="1.4" opacity=".8"/><circle cx="340" cy="90" r="1" opacity=".6"/>
+    <circle cx="430" cy="30" r="1.5" opacity=".9"/><circle cx="520" cy="75" r="1.1" opacity=".6"/>
+    <circle cx="640" cy="40" r="1.6" opacity=".85"/><circle cx="720" cy="100" r="1.2" opacity=".7"/>
+    <circle cx="760" cy="30" r="1" opacity=".6"/><circle cx="40" cy="140" r="1" opacity=".5"/>
+  </g>
+  <circle cx="540" cy="300" r="150" fill="url(#glow)"/>
+  <circle cx="540" cy="300" r="68" fill="url(#sun)"/>
+  <path d="M0 330 C120 270 210 300 300 285 C390 270 470 230 560 260 C650 290 720 270 800 250 L800 500 L0 500Z" fill="#a2507a"/>
+  <path d="M0 360 C90 330 170 350 260 335 C360 318 430 300 520 330 C610 360 700 330 800 320 L800 500 L0 500Z" fill="#6c3b6e"/>
+  <rect y="372" width="800" height="128" fill="url(#lake)"/>
+  <g fill="#ffe2a8" opacity=".55">
+    <rect x="490" y="382" width="100" height="3" rx="1.5"/>
+    <rect x="505" y="394" width="70" height="3" rx="1.5"/>
+    <rect x="515" y="406" width="50" height="2.5" rx="1.25"/>
+    <rect x="525" y="418" width="30" height="2" rx="1"/>
+  </g>
+  <path d="M0 410 C100 385 180 400 280 420 C330 430 360 445 380 500 L0 500Z" fill="#3b2450"/>
+  <path d="M800 400 C700 390 620 420 560 450 C530 465 520 480 515 500 L800 500Z" fill="#2c1b40"/>
+  <path d="M0 450 C80 440 160 455 220 500 L0 500Z" fill="#1d1230"/>
+  <g fill="none" stroke="#2c1b40" stroke-width="3" stroke-linecap="round">
+    <path d="M300 150 q10 -10 20 0 q10 -10 20 0"/>
+    <path d="M350 180 q7 -7 14 0 q7 -7 14 0"/>
+    <path d="M270 190 q6 -6 12 0 q6 -6 12 0"/>
+  </g>
+</svg>

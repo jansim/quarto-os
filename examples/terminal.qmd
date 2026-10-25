@@ -1,0 +1,145 @@
+---
+title: "Terminals"
+subtitle: "A real bash in a real Linux VM — right inside your page."
+quarto-os:
+  vm:
+    setup: |
+      mkdir -p ~/playground
+      cd ~/playground
+      printf 'cherries\napples\nbananas\napples\n' > fruits.txt
+      printf 'import sys\nprint("Python", sys.version.split()[0], "says hi!")\n' > hello.py
+---
+
+A terminal window runs `bash` in a Debian Linux VM that lives entirely in your browser
+(powered by [CheerpX](https://cheerpx.io)). The first terminal on the page boots the VM —
+that takes a few seconds on the first visit while the engine and disk blocks are
+downloaded. All terminals on a page share **one** VM.
+
+::: {.callout-note collapse="true"}
+## What's in this VM?
+The default disk is Debian (i386) with `bash`, `git`, `python3`, `nano`, `vim`, `less`,
+`grep`, `sed`, `awk` and the usual coreutils. The user is `user` with the home directory
+`/home/user` (`~`). There is **no network** inside the VM, so `apt install` or
+`pip install` won't work. This page's front matter prepares a `~/playground` folder with
+two files using `quarto-os: vm: setup:`.
+:::
+
+## Your first terminal
+
+A terminal is a window with `app="terminal"`. Give it an `#id` so snippets can target it:
+
+````markdown
+::: {#shell .os-window app="terminal" title="bash" height="300px" cwd="~/playground"}
+:::
+````
+
+::: {#shell .os-window app="terminal" title="bash" height="300px" cwd="~/playground"}
+:::
+
+### Clickable run snippets
+
+Add `.os-run` to inline code or a code block and it becomes clickable: a click types the
+text into the terminal and presses <kbd>Enter</kbd>. Try them — they all go to the
+terminal above (`target="shell"`):
+
+- List the files: `ls -la`{.os-run target="shell"}
+- Count the lines: `wc -l fruits.txt`{.os-run target="shell"}
+- Sort and de-duplicate: `sort fruits.txt | uniq -c`{.os-run target="shell"}
+- Run Python: `python3 hello.py`{.os-run target="shell"}
+
+A code block with several lines sends them one after another:
+
+```{.bash .os-run target="shell"}
+echo "durian" >> fruits.txt
+sort -u fruits.txt
+```
+
+This is the Markdown for the snippets above:
+
+````markdown
+- List the files: `ls -la`{.os-run target="shell"}
+
+```{.bash .os-run target="shell"}
+echo "durian" >> fruits.txt
+sort -u fruits.txt
+```
+````
+
+::: {.callout-tip}
+Snippets are a great way to let beginners follow along without typos — but it's a real
+shell, so encourage them to type the next command themselves.
+:::
+
+## Starting directory and commands: `cwd` & `run`
+
+`cwd` sets the directory the shell starts in, and `run` types a command as soon as the shell
+is ready (separate several commands with `;`). Here we use the shortcode form, which is
+handy when you don't need an id:
+
+```markdown
+{{{< os terminal title="python3 — playground" cwd="~/playground" run="python3 hello.py; python3 -c 'print(6 * 7)'" height="200px" >}}}
+```
+
+{{< os terminal title="python3 — playground" cwd="~/playground" run="python3 hello.py; python3 -c 'print(6 * 7)'" height="200px" >}}
+
+## Two terminals, one machine
+
+Every terminal on a page is a separate shell **on the same VM**, so they see the same files and
+processes. Start a "chat" that the right terminal follows with `tail -f`, then write to it
+from the left:
+
+::: {.win-row .cols-2}
+
+::: {#left .os-window app="terminal" title="left" height="260px" cwd="~"}
+:::
+
+::: {#right .os-window app="terminal" title="right" height="260px" theme="dark" cwd="~"}
+:::
+
+:::
+
+1. Right: `touch /tmp/chat.log; tail -f /tmp/chat.log`{.os-run target="right"}
+2. Left: `echo "left: hello, right!" >> /tmp/chat.log`{.os-run target="left"}
+3. Left: `echo "left: we share one VM" >> /tmp/chat.log`{.os-run target="left"}
+4. Left: `ps -e | grep tail`{.os-run target="left"} — the left shell sees the right one's process
+
+Press <kbd>Ctrl</kbd>+<kbd>C</kbd> in the right terminal to stop `tail`.
+
+````markdown
+::: {.win-row .cols-2}
+
+::: {#left .os-window app="terminal" title="left" height="260px"}
+:::
+
+::: {#right .os-window app="terminal" title="right" height="260px" theme="dark"}
+:::
+
+:::
+
+Right: `tail -f /tmp/chat.log`{.os-run target="right"}
+````
+
+## Snippets without a target
+
+Without `target`, a snippet goes to the terminal you used (focused) most recently. Click
+into one of the terminals above, then click: `uname -a; whoami; pwd`{.os-run}
+
+If there is no terminal yet, a new floating terminal opens over the page. You can also
+open one yourself with a launch button — each click opens a new instance, which you can
+drag around and close:
+
+[Open a floating terminal]{.os-launch app="terminal" title="floating bash" cwd="~/playground" width=560 height=320}
+
+```markdown
+[Open a floating terminal]{.os-launch app="terminal" title="floating bash" cwd="~/playground"}
+```
+
+## Keyboard & clipboard
+
+- The terminal is a full [xterm.js](https://xtermjs.org) terminal: colors, cursor keys, tab
+  completion, <kbd>Ctrl</kbd>+<kbd>C</kbd>, full-screen programs like `nano`, `vim` and `less`.
+- Copy and paste work with your browser's usual shortcuts.
+- Everything resets when you reload the page — unless the document sets
+  `quarto-os: vm: persist: true`.
+
+Next: put terminals to work in the [git lesson](git-lesson.qmd).

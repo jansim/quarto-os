@@ -1,0 +1,19 @@
+---
+title: "misc options"
+filters: [quarto-os]
+---
+
+::: {.os-desktop #d1 height="420px" theme="dark" title="Lesson"}
+::: {.os-window title="notes.md" x=30 y=20 width=300 height=200 state="minimized"}
+Minimized at start.
+:::
+::: {.os-window title="Big" state="maximized" theme="dark"}
+Maximized at start, dark chrome.
+:::
+:::
+
+::: {.os-desktop height="300px" menubar="false" dock="" wallpaper="linear-gradient(135deg,#0f766e,#22d3ee)"}
+::: {.os-window title="no menubar, no dock" x=40 y=30 width=360 height=160}
+Teal wallpaper.
+:::
+:::

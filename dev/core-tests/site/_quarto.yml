@@ -1,0 +1,9 @@
+project:
+  type: website
+website:
+  title: "qos site test"
+filters: [quarto-os]
+quarto-os:
+  vm:
+    setup: |
+      echo "from _quarto.yml \$HOME"

@@ -1,0 +1,8 @@
+---
+title: Sub page
+---
+
+::: {.os-desktop height=360px}
+:::
+
+No VM here: `ls`{.bash}
