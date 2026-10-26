@@ -90,9 +90,8 @@ allow it to autoplay):
 :::
 
 ::: {.callout-note}
-Embeds from other sites (YouTube, Vimeo…) work in content windows too — but **not on pages
-that also use the VM**, because those pages are cross-origin isolated. Self-host your
-videos when you mix them with terminals.
+Embeds from other sites (YouTube, Vimeo…) can work alongside VM windows. The
+embedded site still controls whether it permits framing and playback.
 :::
 
 ## Code in many languages

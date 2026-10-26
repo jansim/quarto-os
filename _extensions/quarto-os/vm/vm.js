@@ -1,37 +1,14 @@
-// Quarto OS — VM layer.
-//
-// One shared, headless CheerpX Linux per page. CheerpX gives the page one
-// control console (tty1) plus six virtual terminals (tty2..tty7):
-//   - tty1 runs `qos-agent`, a tiny static i386 helper (agent/qos-agent.c)
-//     that serves file access and exec and starts/supervises sessions, over a
-//     line-oriented base64 protocol;
-//   - every terminal session gets its own VT, whose bytes flow directly
-//     between CheerpX and the Session (no agent hop, no encoding).
-//
-//   const vm = await createVM(QuartoOS.config.vm, { baseUrl: QuartoOS.baseUrl });
-//   vm.on('status', msg => …);  await vm.ready;
-//   const s = await vm.openSession({ cols: 80, rows: 24, cwd: '~' });
-//   s.onData(bytes => term.write(bytes));  term.onData(str => s.write(str));
-//
-// Dependency free. All paths accept a leading `~` (= vm.home).
+// Quarto OS: one shared v86 Linux machine per page.
+// The unprivileged qos-agent multiplexes filesystem requests and six Linux PTYs
+// over a raw serial console. v86 is BSD-2-Clause licensed and needs no COOP/COEP.
 
-const CX_VERSION = '1.4.0';
-const DEFAULT_DISK = 'wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2';
+const V86_VERSION = '0.5.472';
+const DEFAULT_ASSETS = 'https://jansim.github.io/quarto-os/vm-assets/';
 const HOME = '/home/user';
-const AGENT_ENV = ['HOME=' + HOME, 'USER=user', 'PATH=/usr/local/bin:/usr/bin:/bin'];
-const VT_FIRST = 2, VT_LAST = 7; // session terminals (tty1 is the agent's console)
-const LINE_RAW = 600;           // raw bytes per JS→agent line (800 base64 chars)
-const SEND_SLICE_MS = 8;        // max time spent in send() before yielding
-const BULK_WRITE = 64 * 1024;   // larger writes go through the DataDevice
-const ACTIVITY_DEBOUNCE = 300;  // 'activity' fires this long after the last output…
-const ACTIVITY_MAX_WAIT = 1000; // …but at least this often while output continues
-const WATCH_POLL_MS = 3000;     // baseline poll for vm.watch()
-const HOSTNAME = 'quarto-os';
-const PROMPT_MARK = '# quarto-os: hostname';
-// CheerpX has no hostname (sethostname is ENOSYS), so `\h` in Debian's PS1
-// would print nothing ("user@:~$"). Appended to ~/.bashrc once.
-const PROMPT_FIX = `\n${PROMPT_MARK} (the VM has none; show one in the prompt)\n` +
-  `case "$PS1" in *'\\h'*) PS1="\${PS1//\\\\h/${HOSTNAME}}";; esac\n`;
+const VT_FIRST = 2, VT_LAST = 7; // logical session slots, kept for API compatibility
+const LINE_RAW = 600;
+const BULK_WRITE = 64 * 1024;
+const ACTIVITY_DEBOUNCE = 300, ACTIVITY_MAX_WAIT = 1000, WATCH_POLL_MS = 3000;
 
 // errno numbers of i386 Linux → names (Error#code).
 const ERRNO = {
@@ -124,184 +101,36 @@ function parseRecord(r) {
   return e;
 }
 
-// ---------------------------------------------------------------------------
-// Self-healing disk socket
-// ---------------------------------------------------------------------------
-// CheerpX's CloudDevice reads the disk over one WebSocket and never reconnects
-// when it drops (proxies close idle sockets: seen after ~35 s); from then on
-// every uncached read, e.g. starting python3 after a pause, hangs forever.
-// The protocol is simple: per connection the server first sends a text
-// header, then answers each "start-end" text request with that many bytes.
-// So for the disk URL we hand CheerpX a stand-in that reconnects on demand,
-// swallows the repeated header and re-sends unanswered requests.
-
-class DiskSocket extends EventTarget {
-  constructor(Native, url) {
-    super();
-    this._Native = Native;
-    this.url = url;
-    this.binaryType = 'arraybuffer';
-    this.onmessage = this.onerror = this.onopen = this.onclose = null;
-    this._queue = [];       // unanswered requests: [request, bytes still expected]
-    this._header = false;   // the first connection's header was delivered
-    this._closed = false;   // closed by CheerpX
-    this._failed = false;
-    this._retry = 0;
-    this._timer = 0;
-    this._connect();
-  }
-
-  get readyState() { return this._closed ? 3 : this._header ? 1 : 0; }
-
-  _connect() {
-    const ws = this._ws = new this._Native(this.url);
-    ws.binaryType = 'arraybuffer';
-    this._live = false; // header received on this connection
-    ws.onmessage = (e) => {
-      if (typeof e.data === 'string') {
-        this._live = true;
-        this._retry = 0;
-        if (this._header) { for (const q of this._queue) ws.send(q[0]); return; } // reconnected
-        this._header = true;
-      } else if (this._queue.length) {
-        const q = this._queue[0];
-        q[1] -= e.data.byteLength;
-        if (q[1] <= 0 || e.data.byteLength <= 1) this._queue.shift(); // ≤1 byte: CheerpX control reply
-      }
-      this._emit(new MessageEvent('message', { data: e.data }));
-    };
-    ws.onerror = () => { if (!this._header) this._fail(); };
-    ws.onclose = () => {
-      if (this._closed || this._ws !== ws) return;
-      if (!this._header) return this._fail();
-      if (!this._live) this._retry++;
-      this._live = false;
-      if (this._queue.length) this._reconnect(); // else: lazily, on the next request
-    };
-    ws.onopen = () => { if (!this._header) this._emit(new Event('open')); };
-  }
-
-  _fail() { // the first connection failed: let CheerpX see it (vm.js then tries https)
-    if (this._failed) return;
-    this._failed = true;
-    this._emit(new Event('error'));
-  }
-
-  _reconnect() {
-    if (this._timer || this._closed) return;
-    const delay = this._retry ? Math.min(8000, 250 * 2 ** this._retry) : 0;
-    this._timer = setTimeout(() => { this._timer = 0; if (!this._closed) this._connect(); }, delay);
-  }
-
-  send(data) {
-    const m = /^(\d+)-(\d+)$/.exec(String(data));
-    this._queue.push([data, m ? +m[2] - +m[1] + 1 : 1]);
-    const ws = this._ws;
-    if (this._live && ws.readyState === 1) ws.send(data);
-    else if (ws.readyState >= 2) this._reconnect();
-    // else (re)connecting: queued requests go out when the header arrives
-  }
-
-  close() {
-    this._closed = true;
-    clearTimeout(this._timer);
-    try { this._ws.close(); } catch { /* ignore */ }
-  }
-
-  _emit(ev) {
-    const h = this['on' + ev.type];
-    if (h) safe(() => h.call(this, ev));
-    this.dispatchEvent(ev);
-  }
-}
-
-function installDiskSocket(diskUrl) {
-  const Native = globalThis.WebSocket;
-  if (!Native || Native.__qosDisks) { Native?.__qosDisks?.add(diskUrl); return; }
-  const disks = new Set([diskUrl]);
-  function WebSocket(url, protocols) {
-    if (disks.has(String(url))) return new DiskSocket(Native, String(url));
-    return protocols === undefined ? new Native(url) : new Native(url, protocols);
-  }
-  WebSocket.prototype = Native.prototype; // instanceof keeps working
-  for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) WebSocket[k] = Native[k];
-  WebSocket.__qosDisks = disks;
-  globalThis.WebSocket = WebSocket;
-}
-
-// ---------------------------------------------------------------------------
-// Session: a shell on one of the VM's virtual terminals
-// ---------------------------------------------------------------------------
-
 class Session {
   constructor(vm, id, vt, cols, rows) {
     this.vm = vm;
     this.id = id;
-    this.vt = vt;            // /dev/tty<vt> inside the VM
+    this.vt = vt;            // logical slot; Linux allocates /dev/pts/<n>
     this.pid = 0;
     this.cols = cols;
     this.rows = rows;
     this.exited = false;
     this.exitCode = null;
-    // CheerpX VTs do not translate output "\n" into "\r\n" (no ONLCR); the
-    // session does it so any terminal emulator works unchanged.
-    this.convertEol = true;
+    this.convertEol = false; // Linux PTYs apply their own termios output translation.
     this._data = new Set();
     this._exit = new Set();
     this._early = [];        // output that arrived before the first onData()
     this._prevCR = false;
-    this._hold = null;       // input queued while a Ctrl-C is being resolved
     this._rz = 0;
   }
 
-  /** Sends keyboard input (string or bytes). Also makes this session's size the VM's current one. */
+  /** Writes bytes to this shell's PTY; the kernel handles Ctrl-C and job control. */
   write(data) {
-    if (this.exited) return;
-    const u8 = toBytes(data);
-    if (!u8.length) return;
-    if (this._hold) { this._hold.push(u8); return; }
-    this.vm._activate(this);
-    const ctrlC = u8.indexOf(3);
-    if (ctrlC < 0) { this._send(u8, 0, u8.length); return; }
-    // ^C: let the agent decide between SIGINT (non-canonical + ISIG, which
-    // CheerpX ignores) and passing the byte on; keep later input in order.
-    this._send(u8, 0, ctrlC);
-    this._hold = [u8.subarray(ctrlC + 1)];
-    this.vm._req('Y', [], null, { id: this.id, what: 'interrupt' }).then(
-      (r) => r.num === 1, () => false,
-    ).then((handled) => {
-      if (!handled && !this.exited) this.vm._send(3, this.vt);
-      const queued = this._hold;
-      this._hold = null;
-      for (const c of queued) this.write(c);
-    });
+    if (!this.exited) this.vm._writeSession(this, toBytes(data));
   }
 
-  _send(u8, s, e) {
-    const send = this.vm._send, vt = this.vt;
-    for (let i = s; i < e; i++) send(u8[i], vt);
-  }
-
-  /** Sets the terminal size (coalesced, ≤ 1 update per 30 ms). */
   resize(cols, rows) {
     this.cols = Math.max(1, cols | 0);
     this.rows = Math.max(1, rows | 0);
-    if (this._rz) return;
-    this._applySize();
-    this._rz = setTimeout(() => { this._rz = 0; this._applySize(); }, 30);
+    if (!this.exited && this.pid) this.vm._line(`\x02Z ${this.id} ${this.cols} ${this.rows}`);
   }
 
-  _applySize() {
-    // CheerpX VTs share one size; it follows the session in use (see activate).
-    if (!this.exited && (this.vm._active === this || !this.vm._active)) this.vm._activate(this);
-  }
-
-  /**
-   * Makes this session's cols/rows the VM's terminal size (CheerpX VTs share
-   * a single size) and lets its foreground program know (SIGWINCH). Called
-   * automatically on write(); terminals may also call it on focus.
-   */
-  activate() { if (!this.exited) this.vm._activate(this); }
+  activate() { if (!this.exited) this.vm._active = this; }
 
   /** cb(Uint8Array) for every chunk of output. Returns an unsubscribe function. */
   onData(cb) {
@@ -345,7 +174,7 @@ class Session {
       }
       this._prevCR = u8[u8.length - 1] === 13;
     }
-    if (out === u8) out = u8.slice(); // never hand out CheerpX's buffer
+    if (out === u8) out = u8.slice(); // never hand out a shared console buffer
     if (this._early) this._early.push(out);
     else for (const cb of this._data) safe(cb, out);
   }
@@ -367,16 +196,23 @@ class Session {
 class VM {
   constructor(config, baseUrl) {
     const c = config || {};
+    if (c.disk != null || c.diskType != null || c['disk-type'] != null || c.cheerpx != null)
+      throw new Error('CheerpX disk options are no longer supported; build v86 assets and set vm.asset-base');
     const pick = (camel, kebab, dflt) => c[camel] ?? c[kebab] ?? dflt;
     const bool = (v) => v === true || v === 'true';
     this.config = {
-      disk: pick('disk', 'disk', DEFAULT_DISK),
-      diskType: pick('diskType', 'disk-type', 'cloud'),
+      assetBase: String(pick('assetBase', 'asset-base', DEFAULT_ASSETS)),
+      memory: Number(pick('memory', 'memory', 1024)),
+      bootTimeout: Number(pick('bootTimeout', 'boot-timeout', 120000)),
       persist: bool(pick('persist', 'persist', false)),
       cacheId: String(pick('cacheId', 'cache-id', 'quarto-os')),
       setup: pick('setup', 'setup', ''),
-      cheerpx: pick('cheerpx', 'cheerpx', CX_VERSION),
     };
+    if (!Number.isInteger(this.config.memory) || this.config.memory < 256 || this.config.memory > 2048)
+      throw new Error('VM memory must be an integer between 256 and 2048 MiB');
+    if (!Number.isFinite(this.config.bootTimeout) || this.config.bootTimeout <= 0)
+      throw new Error('VM boot-timeout must be a positive number of milliseconds');
+    this._assets = new URL(this.config.assetBase.replace(/\/?$/, '/'), document.baseURI);
     this.home = HOME;
     this.status = '';
     this.isReady = false;
@@ -390,11 +226,8 @@ class VM {
     this._sessions = new Map();  // session id → Session
     this._vts = new Map();       // vt number → Session
     this._active = null;         // session whose size the VTs currently have
-    this._size = [0, 0];
     this._nextId = 1;
     this._q = [];                // outgoing agent lines (FIFO, keeps request order)
-    this._qh = 0;
-    this._pumping = false;
     this._up = false;            // agent said hello and is accepting lines
     this._upWaiters = [];
     this._fb = new Uint8Array(1 << 16); // partial frame across console chunks
@@ -407,11 +240,6 @@ class VM {
     this._bulkSeq = 0;
     this._bulkWrite = BULK_WRITE;
     this._firstSession = true;
-    this._consoleCb = (buf, vt) => this._onConsole(buf, vt);
-
-    const mc = new MessageChannel();
-    mc.port1.onmessage = () => { this._pumping = false; this._pump(); };
-    this._wake = () => mc.port2.postMessage(0);
 
     this.ready = this._boot().then(
       () => { this.isReady = true; this._setStatus('Ready'); },
@@ -444,6 +272,7 @@ class VM {
   // second while triggers keep coming. One timer, re-armed only when it fires
   // (this runs for every chunk of terminal output).
   _activity() {
+    if (this.config.persist && this.isReady && !this._saving) this._scheduleSave();
     if (!this._listeners.activity.size && !this._watches.size) return;
     const a = this._act;
     a.last = performance.now();
@@ -463,80 +292,149 @@ class VM {
 
   // --- boot ---------------------------------------------------------------
 
-  async _loadCheerpX() {
-    const v = String(this.config.cheerpx);
-    const url = /^[\w.-]+$/.test(v) ? `https://cxrtnc.leaningtech.com/${v}/cx.esm.js` : v;
-    try {
-      return await import(/* webpackIgnore: true */ url);
-    } catch (e) {
-      throw new Error(`Could not load CheerpX from ${url} (${e.message})`);
-    }
-  }
-
-  async _openDisk(CX) {
-    const { disk, diskType } = this.config;
-    const abs = (u) => new URL(u, document.baseURI).href;
-    try {
-      switch (diskType) {
-        case 'cloud':
-          if (disk.startsWith('wss:')) installDiskSocket(disk);
-          try {
-            return await CX.CloudDevice.create(disk);
-          } catch (e) {
-            if (!disk.startsWith('wss:')) throw e;
-            return await CX.CloudDevice.create('https:' + disk.slice(4)); // like WebVM
-          }
-        case 'bytes': return await CX.HttpBytesDevice.create(abs(disk));
-        case 'github': return await CX.GitHubDevice.create(abs(disk));
-        default: throw new Error(`unknown disk type "${diskType}" (expected cloud, github or bytes)`);
-      }
-    } catch (e) {
-      throw new Error(`Could not open the VM disk ${disk}: ${e.message || e}`);
-    }
-  }
-
   async _boot() {
-    this._setStatus('Loading CheerpX…');
-    const agent = fetch(this._agentUrl).then((r) => {
-      if (!r.ok) throw new Error(`Could not load the VM agent ${this._agentUrl} (HTTP ${r.status})`);
-      return r.arrayBuffer();
+    let timer;
+    try {
+      await Promise.race([
+        this._startMachine(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Linux VM boot timed out')), this.config.bootTimeout); }),
+      ]);
+    } catch (error) {
+      this._stopped = true;
+      this._emulator?.destroy();
+      this._agentDown(error);
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+
+  async _startMachine() {
+    this._setStatus('Loading v86…');
+    const asset = name => new URL(name, this._assets).href;
+    const get = async (url, type) => {
+      const response = await fetch(url, {cache: 'no-cache'});
+      if (!response.ok) throw new Error(`Could not load VM asset ${url} (HTTP ${response.status})`);
+      return response[type]();
+    };
+    const [manifest, agent] = await Promise.all([
+      get(asset('manifest.json'), 'json'), get(this._agentUrl, 'arrayBuffer'),
+    ]);
+    if (manifest.runtime !== V86_VERSION || !manifest.image) throw new Error('Incompatible v86 asset manifest; rebuild the VM assets');
+    const agentHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', agent))].map(x => x.toString(16).padStart(2, '0')).join('');
+    this._signature = `${V86_VERSION}/${manifest.image}/${agentHash}/${this.config.memory}/protocol-3`;
+    let snapshot = null;
+    if (this.config.persist) {
+      this._db = await openStore(this.config.cacheId);
+      const saved = await storeRequest(this._db, 'readonly', store => store.get('machine'));
+      if (saved?.signature === this._signature) {
+        this._setStatus('Restoring Linux…');
+        snapshot = await new Response(saved.state.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+      }
+    }
+    await loadRuntime(asset('libv86.js'));
+    if (this._stopped) return;
+    const emulator = this._emulator = new globalThis.V86({
+      wasm_path: asset('v86.wasm'), bios: {url: asset('seabios.bin')},
+      vga_bios: {url: asset('vgabios.bin')}, memory_size: this.config.memory * 1024 * 1024,
+      filesystem: {}, autostart: false, disable_keyboard: true, disable_mouse: true, disable_speaker: true,
+      ...(snapshot ? {initial_state: {buffer: snapshot}} : {
+        bzimage: {url: asset('bzimage')}, initrd: {url: asset('initrd.gz')},
+        cmdline: 'console=ttyS0 tsc=reliable mitigations=off random.trust_cpu=on init=/init',
+      }),
     });
-    agent.catch(() => {});
-    const CX = this._CX = await this._loadCheerpX();
-
-    this._setStatus('Connecting to disk…');
-    const block = await this._openDisk(CX);
-    this._idb = await CX.IDBDevice.create(this.config.cacheId);
-    if (!this.config.persist) await this._idb.reset(); // fresh VM on every page load
-    const overlay = await CX.OverlayDevice.create(block, this._idb);
-    this._dataDev = await CX.DataDevice.create();
-
-    this._setStatus('Booting Linux…');
-    this._cx = await CX.Linux.create({
-      mounts: [
-        { type: 'ext2', dev: overlay, path: '/' },
-        { type: 'dir', dev: this._dataDev, path: '/data' },
-        { type: 'devs', path: '/dev' },
-        { type: 'devpts', path: '/dev/pts' },
-        { type: 'proc', path: '/proc' },
-        { type: 'sys', path: '/sys' },
-      ],
+    this._dataDev = {writeFile: async (name, bytes) => {
+      if (this._checkpointing) await this._capturing;
+      await emulator.create_file(name.replace(/^\//, ''), bytes);
+    }};
+    this._sendText = text => emulator.serial0_send(text);
+    let bootText = '', bootstrapped = !!snapshot;
+    this._bootLog = '';
+    let serial = [], scheduled = false;
+    emulator.add_listener('serial0-output-byte', byte => {
+      if (!this._up) this._bootLog = (this._bootLog + String.fromCharCode(byte)).slice(-4096);
+      bootText = (bootText + String.fromCharCode(byte)).slice(-512);
+      if (/\r?\nQOS_AGENT_STOPPED\r?\n/.test(bootText) || bootText.includes('Kernel panic - not syncing:')) {
+        const error = new Error(bootText.includes('Kernel panic') ? 'Linux guest kernel panic during boot' : 'The Linux VM agent stopped');
+        this._agentDown(error);
+        for (const waiter of this._upWaiters.splice(0)) waiter.reject(error);
+        this._setStatus('Error: ' + error.message);
+        this.isReady = false;
+        this._stopped = true;
+        emulator.destroy();
+        return;
+      }
+      serial.push(byte);
+      if (!scheduled) {
+        scheduled = true;
+        queueMicrotask(() => {
+          const bytes = new Uint8Array(serial); serial = []; scheduled = false;
+          this._onConsole(bytes, 1);
+        });
+      }
+      if (!bootstrapped) {
+        if (bootText.includes('QOS_READY#')) {
+          bootstrapped = true;
+          emulator.create_file('qos-agent', new Uint8Array(agent)).then(() => {
+            this._sendText('cp /mnt/host/qos-agent /tmp/qos-agent && chmod 755 /tmp/qos-agent && /tmp/qos-agent; printf \"\\nQOS_AGENT_STOPPED\\n\"\n');
+          }).catch(error => { for (const waiter of this._upWaiters.splice(0)) waiter.reject(error); });
+        }
+      }
     });
-    // A session opened before boot finished may already have picked a size.
-    const [cols, rows] = this._active ? [this._active.cols, this._active.rows] : [80, 24];
-    this._size = [cols, rows];
-    this._send = this._cx.setCustomConsole(this._consoleCb, cols, rows);
-    await this._dataDev.writeFile('/qos-agent', new Uint8Array(await agent));
-
+    const ready = new Promise(resolve => emulator.add_listener('emulator-ready', resolve));
     const up = this._waitUp();
-    this._agentLoop();
+    await ready;
+    if (this._stopped) return;
+    this._setStatus(snapshot ? 'Restoring Linux…' : 'Booting Linux…');
+    await emulator.run();
+    if (snapshot) this._sendText('\x02B 2147483647\n');
     await up;
-    // Warm the disk cache for what a terminal needs (bash, its libraries,
-    // profile/.bashrc helpers: ~5 s of cold disk reads, 0.35 s warm) while
-    // the steps below run and before anyone opens a terminal.
-    this._exec('bash -lic exit < /dev/null', { env: { SHLVL: '1', HISTFILE: '/dev/null' } }).catch(() => {});
     await this._ensureDefaults();
     await this._runSetup();
+    if (this.config.persist) {
+      this._scheduleSave();
+      this._onPageHide = () => { this.save().catch(error => console.warn('[quarto-os vm] save failed', error)); };
+      globalThis.addEventListener('pagehide', this._onPageHide);
+    }
+  }
+
+  _scheduleSave() {
+    if (this._resetting || this._stopped) return;
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => this.save().catch(error => {
+      console.warn('[quarto-os vm] save failed', error);
+      this._setStatus('Could not save VM changes: ' + error.message);
+    }), 2000);
+  }
+
+  /** Atomically checkpoints the full machine, including mutable 9p files. */
+  async save() {
+    await this.ready;
+    if (!this.config.persist) return false;
+    if (this._saving) return this._saving;
+    this._saving = this._save();
+    try { return await this._saving; } finally { this._saving = null; }
+  }
+
+  async _save() {
+    clearTimeout(this._saveTimer);
+    const deadline = performance.now() + 10000;
+    while (this._pending.size || this._q.length || !this._credit) {
+      if (performance.now() > deadline) throw new Error('Cannot checkpoint while VM requests are active; wait for them to finish');
+      await sleep(25);
+    }
+    this._checkpointing = true;
+    let release;
+    this._capturing = new Promise(resolve => { release = resolve; });
+    let state;
+    try {
+      await this._emulator.stop();
+      state = await this._emulator.save_state();
+    } finally {
+      await this._emulator.run();
+      this._checkpointing = false; release(); this._pump();
+    }
+    const compressed = await new Response(new Blob([state]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+    await storeRequest(this._db, 'readwrite', store => store.put({signature: this._signature, state: compressed}, 'machine'));
+    return true;
   }
 
   _waitUp() {
@@ -544,42 +442,18 @@ class VM {
     return new Promise((resolve, reject) => this._upWaiters.push({ resolve, reject }));
   }
 
-  // Runs the agent forever. It is executed straight from the DataDevice; if
-  // that ever fails to start, fall back to copying it into /tmp first.
-  async _agentLoop() {
-    const opts = { env: AGENT_ENV, cwd: HOME, uid: 1000, gid: 1000 };
-    const copy = 'cat /data/qos-agent > /tmp/qos-agent && chmod 755 /tmp/qos-agent && exec /tmp/qos-agent';
-    let viaTmp = false, failures = 0;
-    for (;;) {
-      this._hello = false;
-      let err = null;
-      try {
-        if (viaTmp) await this._cx.run('/bin/sh', ['-c', copy], opts);
-        else await this._cx.run('/data/qos-agent', [], opts);
-      } catch (e) { err = e; }
-      const started = this._hello;
-      this._agentDown(new Error('The Linux VM agent stopped' + (err ? `: ${err.message || err}` : '')));
-      if (started) { failures = 0; console.warn('[quarto-os vm] agent exited, restarting'); }
-      else if (!viaTmp) viaTmp = true;
-      else if (++failures >= 3) {
-        const e = new Error('The Linux VM agent could not be started' + (err ? `: ${err.message || err}` : ''));
-        for (const w of this._upWaiters.splice(0)) w.reject(e);
-        return;
-      }
-      await sleep(300);
-    }
-  }
-
   _onHello() {
     this._hello = true;
     this._up = true;
+    this._credit = true;
     for (const w of this._upWaiters.splice(0)) w.resolve();
     this._pump();
   }
 
   _agentDown(err) {
+    this._failure = err;
     this._up = false;
-    this._q.length = 0; this._qh = 0;
+    this._q.length = 0;
     this._fl = 0; this._inFrame = false;
     for (const p of this._pending.values()) p.reject(err);
     this._pending.clear();
@@ -600,8 +474,7 @@ class VM {
     if (missing.length) {
       await this._writeFile(gitconfig, `${git && !git.endsWith('\n') ? '\n' : ''}[user]\n${missing.join('\n')}\n`, true);
     }
-    const bashrc = await this._readText(`${HOME}/.bashrc`).catch(() => null);
-    if (bashrc !== null && !bashrc.includes(PROMPT_MARK)) await this._writeFile(`${HOME}/.bashrc`, PROMPT_FIX, true);
+
   }
 
   async _runSetup() {
@@ -636,35 +509,22 @@ class VM {
   // unless a big transfer is in progress.
   _line(s) {
     this._q.push(s);
-    if (!this._pumping) this._pump();
+    this._pump();
   }
 
   _pump() {
-    if (!this._up || !this._send) return;
-    const q = this._q, send = this._send, t0 = performance.now();
-    while (this._qh < q.length) {
-      const s = q[this._qh];
-      q[this._qh++] = undefined;
-      for (let i = 0; i < s.length; i++) send(s.charCodeAt(i));
-      send(10);
-      if (this._qh < q.length && performance.now() - t0 > SEND_SLICE_MS) {
-        this._pumping = true;
-        this._wake(); // continue in a fresh task so the page stays responsive
-        return;
-      }
-    }
-    q.length = 0;
-    this._qh = 0;
+    if (!this._up || this._checkpointing || !this._credit || !this._q.length) return;
+    this._credit = false;
+    this._sendText(this._q.shift() + '\n');
   }
 
-  // CheerpX VTs share one size: give them the size of the session in use and
-  // tell its foreground program (CheerpX raises no SIGWINCH itself).
-  _activate(s) {
-    this._active = s;
-    if (!this._cx || (this._size[0] === s.cols && this._size[1] === s.rows)) return;
-    this._size = [s.cols, s.rows];
-    this._send = this._cx.setCustomConsole(this._consoleCb, s.cols, s.rows);
-    if (s.pid && !s.exited) this._line(`\x02Z ${s.id}`);
+  _activate(session) { this._active = session; }
+
+  _writeSession(session, bytes) {
+    for (let offset = 0; offset < bytes.length; offset += LINE_RAW) {
+      const end = Math.min(offset + LINE_RAW, bytes.length);
+      this._line(`\x02I ${session.id} ${b64encode(bytes, offset, end)}`);
+    }
   }
 
   _onConsole(buf, vt) {
@@ -721,7 +581,7 @@ class VM {
     while ((nl = this._stray.indexOf('\n')) >= 0) {
       const line = this._stray.slice(0, nl).replace(/\r$/, '');
       this._stray = this._stray.slice(nl + 1);
-      if (line.trim()) console.log('[quarto-os vm]', line);
+      if (this.isReady && line.trim()) console.log('[quarto-os vm]', line);
     }
     if (this._stray.length > 4096) this._stray = '';
   }
@@ -741,6 +601,14 @@ class VM {
     try {
       const id = num();
       switch (t) {
+        case 97: // a: the agent consumed one input frame
+          this._credit = true; this._pump();
+          break;
+        case 111: { // o: PTY output
+          const session = this._sessions.get(id);
+          if (session) { session._push(b64decode(b, p, e)); this._activity(); }
+          break;
+        }
         case 100: { // d: data chunk of a request
           const q = this._pending.get(id);
           if (q) {
@@ -781,6 +649,11 @@ class VM {
           break;
         }
         case 104: // h: hello
+          if (num() !== 3) {
+            const error = new Error('Incompatible VM agent protocol; rebuild the agent');
+            for (const waiter of this._upWaiters.splice(0)) waiter.reject(error);
+            break;
+          }
           this._onHello();
           break;
       }
@@ -791,6 +664,7 @@ class VM {
 
   // Sends a request and resolves with {num, chunks, size, payload}.
   _req(type, nums, body, { what = type, onData, id = this._nextId++ } = {}) {
+    if (this._failure) return Promise.reject(this._failure);
     return new Promise((resolve, reject) => {
       this._pending.set(id, { resolve, reject, chunks: [], size: 0, onData, what });
       const head = `\x02${type} ${id}${nums.length ? ' ' + nums.join(' ') : ''}`;
@@ -837,12 +711,14 @@ class VM {
     const p = this._path(path);
     const u8 = toBytes(data);
     if (!append && u8.length > this._bulkWrite && this._dataDev) {
-      // Bulk path: hand the bytes to the VM through the DataDevice (fast) and
-      // let the agent copy them. DataDevice files cannot be deleted or
-      // overwritten, hence a fresh name per transfer.
+      // Bypass serial encoding for bulk data, then remove the temporary 9p file.
       const name = `/xfer-${++this._bulkSeq}-${Date.now().toString(36)}`;
       await this._dataDev.writeFile(name, u8);
-      await this._req('F', [], fields(['/data' + name, p]), { what: `write ${p}` });
+      try {
+        await this._req('F', [], fields(['/data' + name, p]), { what: `write ${p}` });
+      } finally {
+        await this._req('D', [], fields(['/data' + name]), { what: 'remove transfer file' });
+      }
     } else {
       await this._req('W', [append ? 1 : 0], fields([p, u8]), { what: `write ${p}` });
     }
@@ -898,9 +774,10 @@ class VM {
     // `clear_console` (which wipes a VT) when the session ends.
     env = { SHLVL: '1', ...env };
     try {
-      const r = await this._req('S', [vt], fields([dir, cmd || '', ...envFields(env)]),
+      const r = await this._req('S', [vt, s.cols, s.rows], fields([dir, cmd || '', ...envFields(env)]),
         { what: 'open session', id });
       s.pid = r.num;
+      s.resize(s.cols, s.rows);
     } catch (e) {
       this._sessions.delete(id);
       this._vts.delete(vt);
@@ -1016,27 +893,51 @@ class VM {
     }
   }
 
-  /** Wipes the IndexedDB overlay (all VM changes) and reloads the page. */
+  /** Deletes this cache and reloads from the pristine guest image. */
   async reset() {
-    try {
-      const CX = this._CX || (this._CX = await this._loadCheerpX());
-      const idb = this._idb || await CX.IDBDevice.create(this.config.cacheId);
-      await idb.reset();
-    } finally {
-      location.reload();
-    }
+    this._resetting = true;
+    clearTimeout(this._saveTimer);
+    globalThis.removeEventListener('pagehide', this._onPageHide);
+    if (this._saving) { try { await this._saving; } catch { /* reset also recovers a failed checkpoint */ } }
+    const db = this._db || await openStore(this.config.cacheId);
+    await storeRequest(db, 'readwrite', store => store.clear());
+    location.reload();
   }
 }
 
-/**
- * Creates the page's VM. Resolves immediately (boot runs in the background;
- * await vm.ready). Rejects if the page is not cross-origin isolated.
- */
-export async function createVM(config, { baseUrl } = {}) {
-  if (!globalThis.crossOriginIsolated) {
-    throw new Error('The Linux VM needs a cross-origin isolated page (COOP: same-origin and ' +
-      'COEP: require-corp or credentialless). Quarto OS registers coi-serviceworker.js for this; ' +
-      'make sure `coi` is not disabled and reload the page, or serve the site with those headers.');
-  }
+let runtimePromise;
+function loadRuntime(url) {
+  if (!runtimePromise) runtimePromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.onload = () => globalThis.V86 ? resolve() : reject(new Error('v86 runtime did not load'));
+    script.onerror = () => reject(new Error(`Could not load v86 from ${url}`));
+    document.head.append(script);
+  }).catch(error => { runtimePromise = null; throw error; });
+  return runtimePromise;
+}
+
+function openStore(name) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name + ":v86", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('snapshots');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error('VM cache is open in another tab; close it and retry'));
+  });
+}
+
+function storeRequest(db, mode, operation) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('snapshots', mode);
+    const request = operation(transaction.objectStore('snapshots'));
+    transaction.oncomplete = () => resolve(request.result);
+    transaction.onabort = () => reject(transaction.error || request.error || new Error('VM cache transaction aborted'));
+    transaction.onerror = () => {}; // onabort preserves the transaction's final outcome
+  });
+}
+
+/** Creates the shared machine; await vm.ready before using it. */
+export async function createVM(config, {baseUrl} = {}) {
   return new VM(config, baseUrl);
 }

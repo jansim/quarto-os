@@ -5,6 +5,7 @@ page-layout: full
 toc: false
 quarto-os:
   vm:
+    asset-base: vm-assets/
     setup: |
       # Runs once in the fresh VM, before the windows attach.
       git config --global user.name "Ada Lovelace"

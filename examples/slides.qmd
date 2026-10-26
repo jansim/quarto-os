@@ -12,6 +12,7 @@ format:
     footer: "[Quarto OS](../index.html) · ← → to navigate · drag windows by their title bar"
 quarto-os:
   vm:
+    asset-base: vm-assets/
     setup: |
       git config --global user.name "Presenter"
       git config --global user.email "presenter@example.com"

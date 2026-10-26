@@ -689,26 +689,6 @@ function vm() {
   return vmP;
 }
 
-// == cross-origin isolation (GitHub Pages)
-function coi() {
-  const K = 'qos-coi-reload', SW = NAV.serviceWorker;
-  let ss = null;
-  try { ss = W.sessionStorage; } catch (e) { /* ignore */ }
-  if (W.crossOriginIsolated) { if (ss) ss.removeItem(K); return; }
-  if (!config.usesVM || config.coi === false || !SW || !W.isSecureContext) return;
-  const reload = () => {
-    if (ss && ss.getItem(K)) return warn('page is still not cross-origin isolated; the Linux VM may not start.');
-    if (ss) ss.setItem(K, '1');
-    location.reload();
-  };
-  // COEP credentialless (Chromium, Firefox) keeps cross-origin images without CORP working; Safari: require-corp
-  const cred = !!(W.chrome || W.netscape || NAV.userAgentData || /Firefox\//.test(NAV.userAgent));
-  SW.register(new URL((config.coiUrl || 'coi-serviceworker.js') + (cred ? '?coep=credentialless' : ''), location.href).href).then(reg => {
-    if (reg.active && !SW.controller) reload();
-    else if (!reg.active) SW.addEventListener('controllerchange', reload, { once: true });
-  }, err => warn('could not register coi-serviceworker.js: ' + err));
-}
-
 // == init
 // the Lua filter can't see shortcodes: check the DOM too
 function pageUsesVM() {
@@ -742,7 +722,6 @@ function init() {
   const c = D.getElementById('quarto-os-config');
   try { config = QOS.config = c ? JSON.parse(c.textContent || '{}') : {}; } catch (e) { console.error('[quarto-os] bad config', e); }
   if (!config.usesVM && pageUsesVM()) config.usesVM = true;
-  coi();
   if (W.IntersectionObserver) {
     io = new IntersectionObserver(es => es.forEach(e => {
       const w = e.target.qosWin;

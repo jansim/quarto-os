@@ -7,11 +7,11 @@
     [label]{.os-launch ...}                        -> <button class="qos-launch" data-qos-opts='{…}'>
     `cmd`{.os-run target=id} / ```{.os-run}       -> class "qos-run" + data-qos-target
   and adds the JSON config (`quarto-os:` YAML, camelCase keys + usesVM), the
-  html dependency and, when the page uses the VM, coi-serviceworker.js.
+  html dependency. v86 does not require cross-origin isolation.
   Only active for HTML formats that run JavaScript (html, revealjs, …).
 ]]
 
-local VERSION = "0.1.0"
+local VERSION = "0.2.0"
 local VM_APPS = { terminal = true, vscode = true, explorer = true }
 local DEFAULT_DOCK = "terminal,vscode,explorer"
 
@@ -19,7 +19,7 @@ local DEFAULT_DOCK = "terminal,vscode,explorer"
 -- (shared through package.loaded, `_G` is not visible to shortcode files)
 local S = package.loaded["quarto-os-state"]
 if type(S) ~= "table" then
-  S = { vm = false, dep = false, coi = false }
+  S = { vm = false, dep = false }
   package.loaded["quarto-os-state"] = S
 end
 
@@ -124,23 +124,6 @@ end
 
 local function note_app(app)
   if VM_APPS[app] then S.vm = true end
-end
-
--- Pages that use the VM get coi-serviceworker.js (as an html dependency service
--- worker: copied to the project output root for websites, next to the page for
--- single documents) and a <meta name="quarto-os-vm"> marker; the service worker
--- only cross-origin-isolates pages carrying that marker.
-local function add_coi(meta)
-  if S.coi then return end
-  local m = meta and meta["quarto-os"]
-  if m and pandoc.utils.type(m) == "table" and m.coi == false then return end
-  S.coi = true
-  quarto.doc.add_html_dependency({
-    name = "quarto-os-coi",
-    version = VERSION,
-    meta = { ["quarto-os-vm"] = "true" },
-    serviceworkers = { "coi-serviceworker.js" },
-  })
 end
 
 local function note_dock(dock)
@@ -314,10 +297,7 @@ local function os_shortcode(args, kwargs, meta, raw_args, context)
   end
   note_app(app)
   ensure_dep()
-  -- shortcodes are resolved after user filters ran, so the config script may
-  -- already say usesVM=false: add the service worker here (quarto-os.js also
-  -- detects VM apps in the DOM)
-  if VM_APPS[app] then add_coi(meta) end
+  -- The core also detects shortcode VM apps after the document filters run.
   local classes = { "qos-window" }
   if opts.class then
     for c in opts.class:gmatch("%S+") do classes[#classes + 1] = c end
@@ -405,13 +385,16 @@ local function Pandoc(doc)
   if type(vm) == "table" and vm.autoboot == true then S.vm = true end
   cfg.usesVM = S.vm
   cfg.version = VERSION
-  -- where coi-serviceworker.js is served, relative to this page
+  -- Project-relative VM assets remain valid in nested pages and Pages subpaths.
   local off = quarto.project and quarto.project.offset
-  cfg.coiUrl = (off and off ~= "") and (off .. "/coi-serviceworker.js") or "coi-serviceworker.js"
+  if type(vm) == "table" and type(vm.assetBase) == "string" and
+      not vm.assetBase:match("^%a[%w+.-]*:") and not vm.assetBase:match("^/") then
+    vm.assetBase = (off and off ~= "") and (off .. "/" .. vm.assetBase) or vm.assetBase
+  end
   local js = json(cfg):gsub("</", "<\\/")
   quarto.doc.include_text("in-header",
     '<script type="application/json" id="quarto-os-config">' .. js .. "</script>")
-  if S.vm then add_coi(doc.meta) end
+
   return nil
 end
 

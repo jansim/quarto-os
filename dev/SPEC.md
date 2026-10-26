@@ -10,15 +10,14 @@ A Quarto extension (`_extensions/quarto-os/`) that renders macOS-style windows
 websites and reveal.js slides. Windows hold arbitrary content (images, video,
 code blocks, markdown) or "apps": a terminal, a VS Code-like editor and a
 Finder-like file explorer, all backed by ONE shared headless Linux VM per page
-(CheerpX, the engine behind WebVM — no WebVM UI, no graphical desktop in the
-VM). Optional fake desktop (wallpaper, menubar, dock) that launches windows,
+(v86, BSD-2-Clause; headless Linux). Optional fake desktop (wallpaper, menubar, dock) that launches windows,
 multiple instances of the same app allowed. Built for teaching (e.g. git in
 the terminal + VS Code + explorer showing `.git`).
 
 Bundle size matters: the core (`quarto-os.js` + `quarto-os.css`) must stay
 small (target < 60 KB unminified total) and is the only thing loaded on every
 page. Everything heavy is lazy-loaded the first time it's needed:
-xterm (vendored), Monaco (CDN), CheerpX (Leaning Tech CDN), the VM layer.
+xterm (vendored), Monaco (CDN), v86 (project-hosted assets), the VM layer.
 
 ## File layout / ownership
 
@@ -28,7 +27,6 @@ _extensions/quarto-os/
   quarto-os.lua           core   (filter + `os` shortcode)
   quarto-os.js            core   (classic script, defines window.QuartoOS)
   quarto-os.css           core
-  coi-serviceworker.js    core   (cross-origin isolation for GitHub Pages)
   apps/terminal.js        apps   (ES module)
   apps/explorer.js        apps   (ES module)
   apps/vscode.js          apps   (ES module)
@@ -124,10 +122,10 @@ Nested `.os-window`s become floating windows inside the desktop.
 ```yaml
 quarto-os:
   theme: light            # default chrome theme (light|dark)
-  coi: true               # register coi-serviceworker.js on pages using the VM
   vm:
-    disk: wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2
-    disk-type: cloud      # cloud | github | bytes
+    asset-base: https://jansim.github.io/quarto-os/vm-assets/
+    memory: 1024
+    boot-timeout: 120000
     persist: false        # keep VM disk changes across reloads (IndexedDB)
     cache-id: quarto-os   # IndexedDB name for the overlay
     autoboot: false       # boot on page load instead of on first VM window
@@ -149,9 +147,8 @@ quarto-os:
   in the head, with the `quarto-os:` YAML normalised to camelCase keys plus
   `"usesVM": true|false` (any VM app on the page incl. docks and launchers).
 - Lua attaches `quarto-os.js` + `quarto-os.css` as an html dependency
-  (`apps/`, `vm/`, `vendor/` shipped as dependency `resources`) and, if the page
-  uses the VM and `coi` isn't false, `coi-serviceworker.js` via
-  `quarto.doc.add_format_resource` (lands next to the rendered page).
+  (`apps/`, `vm/`, `vendor/` shipped as dependency `resources`). VM assets are
+  separately published and configured by `vm.asset-base`.
 
 ## Core JS API (`window.QuartoOS`, defined by quarto-os.js)
 
@@ -204,7 +201,7 @@ reuses `apps/terminal.js` (export a helper such as `createTerminal(el, opts, os)
 export async function createVM(config /* QuartoOS.config.vm */, { baseUrl }) → vm
 vm.ready                    // Promise resolved when the agent is up
 vm.home                     // "/home/user"
-vm.on('status', cb)         // boot progress strings, e.g. "Downloading CheerpX…"
+vm.on('status', cb)         // boot progress strings, e.g. "Loading v86…"
 vm.on('activity', cb)       // debounced after terminal output/exec, used to refresh views
 vm.openSession({cols, rows, cwd, cmd, env}) → Promise<Session>   // pty running bash -l (or cmd)
   session.write(str | Uint8Array); session.resize(cols, rows)
@@ -222,22 +219,9 @@ vm.reset()        // wipe the IndexedDB overlay and reload the page
 `~` in any path argument expands to `vm.home`. Errors reject with `Error`
 whose message is human readable.
 
-## Facts established so far
+## Runtime implementation
 
-- CheerpX 1.4.0: `import("https://cxrtnc.leaningtech.com/1.4.0/cx.esm.js")`.
-  Needs `crossOriginIsolated` (COOP same-origin + COEP require-corp/credentialless).
-  Works in the sandbox's headless Chromium (Playwright at
-  `/opt/node22/lib/node_modules/playwright/index.mjs`) when served by `dev/server.mjs`.
-- Default disk `wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2`
-  (Debian buster i386): bash, git 2.20.1, python3.7, nano, vim, `script`; no tmux.
-  User `user` uid/gid 1000, home `/home/user`. First `cx.run` ≈ 10 s (disk streaming).
-- CheerpX exposes one console with 7 virtual terminals: output arrives via
-  `setCustomConsole((buf, vt) => …, cols, rows)` tagged with `vt`, input goes in with
-  `send(byte, vt)`. `/dev/ptmx` only ever yields one pty, so the final design runs the
-  agent (fs ops, exec, session supervision) on tty1 and one `bash -l` per session on
-  tty2–tty7 → at most 6 terminals at once; all VTs share one size (`session.activate()`).
-  See `agent/README.md` for the protocol and CheerpX quirks.
-- The coi service worker ships as an html dependency at the site root (not via
-  `add_format_resource`, which copies next to the *source* in website projects).
-- `DataDevice.writeFile(path, data)` → visible read-only under its mount (e.g. `/data`).
-- Zig (C cross-compiler) available: `<scratchpad>/zigenv/bin/python -m ziglang cc -target x86-linux-musl`.
+The v86 backend and guest build now implement this contract. See
+[dev/v86/README.md](v86/README.md) and [agent/README.md](../agent/README.md)
+for assets, persistence and protocol version 3. Six logical slots map to Linux
+PTYs, not hardware virtual terminals. No COOP/COEP or service worker is required.

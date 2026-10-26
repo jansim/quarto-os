@@ -1,76 +1,49 @@
 # qos-agent
 
-The in-VM helper of Quarto OS's Linux VM (`_extensions/quarto-os/vm/vm.js`).
-It is a static 32-bit x86 Linux binary (CheerpX only runs i386), about 48 KB.
+The unprivileged helper for Quarto OS's v86 Linux guest. Build the static i386
+binary with Zig 0.14.1:
 
 ```sh
-agent/build.sh                                  # zig on PATH
-ZIG="python -m ziglang" agent/build.sh          # zig from pip (ziglang)
+agent/build.sh
+ZIG="python -m ziglang" agent/build.sh  # PyPI ziglang package
 ```
 
-`build.sh` writes `_extensions/quarto-os/vm/qos-agent`. Commit the binary.
+The output `_extensions/quarto-os/vm/qos-agent` is committed. The browser transfers
+it through the guest's virtio 9p share and starts it on the serial console. When
+started as root it drops supplementary groups, gid and uid to 1000 before handling
+requests. All file operations, commands and terminal children run as `user`.
 
-## How it fits together
+## Protocol version 3
 
-CheerpX gives the page one control console (tty1) plus six virtual terminals
-(tty2 to tty7). Their output reaches `setCustomConsole((buf, vt) => …)` tagged
-with `vt`, and `send(byte, vt)` types into them.
+Each frame starts with STX (`0x02`) and ends with LF. The frame is a type, request
+id, optional decimal arguments and an optional base64 body, separated by spaces.
+Bodies contain NUL-separated fields; `+ id base64` appends a body fragment before
+its final request. Binary transfers preserve NULs. Every consumed input frame
+produces `a id`: the browser must wait for that serial input credit before sending
+the next frame, preventing UART overflow on large pastes and writes.
 
-- **tty1** runs the agent. `vm.js` puts the binary into a `DataDevice`, runs it
-  from `/data` with `cx.run` (restarting it if it exits), and talks to it with a
-  line protocol: STX-prefixed, LF-terminated frames, base64 payloads, and
-  request ids. The full reference is at the top of `qos-agent.c`. The agent
-  serves ls/stat/read/write/copy/mkdir -p/rm -r/rename, and asynchronous
-  `sh -c` exec with streamed output. It also starts and supervises sessions.
-  Everything runs from one `poll()` loop with output batched per wakeup.
-- **tty2 to tty7** each carry one terminal session (`bash -l` as uid 1000).
-  Session bytes flow directly between CheerpX and `vm.js` with no agent hop
-  and no encoding. The agent only spawns the shell (setsid plus the VT as its
-  controlling tty), signals it (resize, Ctrl-C, close) and reports its exit.
+| Request | Body / response |
+| --- | --- |
+| `S id slot cols rows` | cwd, command, then `K=V` fields. Allocate a PTY, fork a login Bash shell, return `r id 0 pid`. Slots 2–7 are logical identifiers, not Linux VT numbers. |
+| `I id` | Raw input bytes for the session; queued nonblocking on the PTY master. |
+| `Z id cols rows` | `TIOCSWINSZ` on the PTY; Linux delivers SIGWINCH to its foreground group. |
+| `C id` | Hang up the session; escalate to SIGKILL after a grace period. |
+| `K id signal` | Signal the session or exec process and its descendants. |
+| `X id` | cwd, shell command, environment. Async `sh -c`, stdout and stderr merged. |
+| `L/T/R id` | List/stat/read a path. |
+| `W id append` | Path, binary data; create/truncate or append. |
+| `F/N id` | Copy/rename: source, destination. |
+| `M/D id` | Recursive mkdir/remove. Removing `/` is refused. |
+| `Q id` | Ping. |
+| `B id` | Restore handshake: kill stale children, discard partial bodies/read jobs and emit hello again. |
 
-## CheerpX 1.4.0 quirks that shaped this
+The agent emits `h 0 3 pid` at startup, `o id base64` for PTY output, `x id code`
+for terminal exit, `d id base64` for exec/read/list output, and
+`r id errno number [base64]` to complete requests. Errno zero means success;
+otherwise the payload is an error message. Exec completion's number is its exit
+status; terminal signal deaths are `128 + signal`.
 
-- **Only one pty.** Every `/dev/ptmx` open aliases `/dev/pts/1` (TIOCGPTN is
-  always 1), so a second pty session is cross-wired with the first. That is why
-  sessions use VTs, which caps them at 6.
-- **VT sizes are global.** `TIOCSWINSZ` on a VT is EINVAL. The only way to set
-  the size is `setCustomConsole(cb, cols, rows)`, which applies to all VTs and
-  raises no SIGWINCH. `vm.js` therefore gives the VTs the size of the session
-  in use (the last one written to or `activate()`d).
-- **SIGWINCH kills processes that have no handler** (Linux ignores it), and
-  `/proc/<pid>/status` has no SigCgt. On resize the agent only signals the
-  session's login shell plus known full-screen programs (vim, nano, less, top,
-  htop, …).
-- **No ONLCR on VTs.** Output `\n` is not turned into `\r\n`. `Session` does
-  that translation (`session.convertEol`).
-- **Ctrl-C in non-canonical mode** (readline, the Python REPL) is passed
-  through as a `\x03` byte instead of raising SIGINT. `vm.js` asks the agent
-  (`Y`), and the agent raises SIGINT on the foreground job. Ctrl-Z and Ctrl-\
-  do nothing (CheerpX: "TODO: handle SIGTSTP/SIGQUIT"), so there is no job
-  suspension.
-- **No process-group kills.** `kill(-pgrp)` and `killpg` give ESRCH, and
-  `/proc/<pid>/stat` reports 0 for ppid/pgrp/session. `getpgid()` and
-  `getsid()` do work on any pid, so groups are found by scanning `/proc`.
-- `sethostname` is ENOSYS and the hostname is empty. `vm.js` patches `\h` in
-  `~/.bashrc`'s PS1.
-- Signal deaths are reported by bash as "Killed".
-- `tcflush` is EINVAL on VTs.
-- `opendir()` succeeds on regular files, so the agent checks with `stat` first.
-- `chmod` fails with EACCES on a file whose mode lacks owner write (e.g. a
-  `cp` from read-only `/data`).
-- dash's `wait` for a background job (`sleep 1 & wait`) never returns. bash's
-  works.
-- In canonical mode, a ^D (VEOF) that arrives while earlier input is still
-  queued is not seen as EOF (`cat` reads on). Typed by hand, it works.
-- `/dev/zero` does not exist (`/dev/urandom` does).
-- `mknod` is ENOSYS.
-- The CloudDevice disk WebSocket is never reconnected. When a proxy drops it
-  (this sandbox's proxy does after about 20 to 40 s idle), every later
-  uncached read hangs forever. `vm.js` substitutes a self-healing socket for
-  the disk URL: the protocol is a text header per connection, then text
-  `"start-end"` requests each answered by that many bytes. The socket
-  reconnects on demand and re-sends unanswered requests.
-- The IndexedDB overlay is written back asynchronously, usually within 1 to
-  3 s. After the very first boot of a fresh cache it takes over 4 s; 12 s was
-  enough in tests. `flushIO()` and `sync` don't speed this up, so with
-  `persist: true` a reload right after a change can lose it.
+Each shell has its own controlling PTY, process group, dimensions and normal Linux
+termios. Ctrl-C/Ctrl-Z are sent as bytes for the kernel line discipline. Output is
+drained before exit notifications. Input queues and read budgets keep one busy
+terminal from blocking unrelated terminals or filesystem operations.

@@ -3,6 +3,7 @@ title: "Desktop"
 subtitle: "A fake desktop with wallpaper, menubar and dock — launch as many windows as you like."
 quarto-os:
   vm:
+    asset-base: vm-assets/
     setup: |
       mkdir -p ~/lab3
       cd ~/lab3

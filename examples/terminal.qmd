@@ -3,6 +3,7 @@ title: "Terminals"
 subtitle: "A real bash in a real Linux VM — right inside your page."
 quarto-os:
   vm:
+    asset-base: vm-assets/
     setup: |
       mkdir -p ~/playground
       cd ~/playground
@@ -11,14 +12,14 @@ quarto-os:
 ---
 
 A terminal window runs `bash` in a Debian Linux VM that lives entirely in your browser
-(powered by [CheerpX](https://cheerpx.io)). The first terminal on the page boots the VM —
-that takes a few seconds on the first visit while the engine and disk blocks are
-downloaded. All terminals on a page share **one** VM.
+(powered by [v86](https://github.com/copy/v86)). The first terminal on the page boots the VM —
+that takes roughly 25–40 seconds on the first visit while the engine and guest are
+downloaded and booted. All terminals on a page share **one** VM.
 
 ::: {.callout-note collapse="true"}
 ## What's in this VM?
-The default disk is Debian (i386) with `bash`, `git`, `python3`, `nano`, `vim`, `less`,
-`grep`, `sed`, `awk` and the usual coreutils. The user is `user` with the home directory
+The default guest is Debian (i386) with `bash`, `git`, `python3` and command-line
+utilities. The VS Code window provides a text editor. The user is `user` with the home directory
 `/home/user` (`~`). There is **no network** inside the VM, so `apt install` or
 `pip install` won't work. This page's front matter prepares a `~/playground` folder with
 two files using `quarto-os: vm: setup:`.

@@ -17,3 +17,6 @@ dev/**/*.log
 .vscode/
 .idea/
 *.swp
+
+# Reproducible browser VM build outputs (published by the Pages workflow)
+/vm-assets/

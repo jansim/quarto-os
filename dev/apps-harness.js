@@ -77,7 +77,7 @@ Win.n = 0; Win.z = 10;
 let vmP = null;
 const loaded = new Map();
 const QuartoOS = window.QuartoOS = {
-  config: { theme: params.get('theme') || 'light', vm: { bootMs: params.has('boot') ? +params.get('boot') : 1800, fail: params.has('fail'), noIdent: params.has('noident') }, cdn: {} },
+  config: { theme: params.get('theme') || 'light', vm: { assetBase: params.get('assets') || '/vm-assets/', bootMs: params.has('boot') ? +params.get('boot') : 1800, fail: params.has('fail'), noIdent: params.has('noident') }, cdn: {} },
   baseUrl,
   apps: APPS,
   windows: [],

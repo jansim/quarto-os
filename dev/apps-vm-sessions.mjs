@@ -2,7 +2,7 @@
 //   node dev/server.mjs . 8203 &  then  node dev/apps-vm-sessions.mjs
 // Expected: A's prompt arrives by itself; B's prompt/output arrive on B (not on A).
 // Observed 2026-10-23 23:10 UTC: no prompt until the first input byte; everything of B shows up on A.
-import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+import { chromium } from './playwright.mjs';
 const browser = await chromium.launch();
 const page = await browser.newPage();
 await page.goto(`http://localhost:${process.argv[2] || 8203}/dev/apps-test.html?vm=real`);

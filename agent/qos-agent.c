@@ -1,72 +1,18 @@
 /*
- * qos-agent — the in-VM helper of Quarto OS.
- *
- * CheerpX gives the page one control console (tty1) plus six more virtual
- * terminals (tty2..tty7) whose bytes the page reads and writes directly
- * (console callback `vt` argument / `send(byte, vt)`). This agent runs on
- * tty1 and provides everything else from one poll() loop: it starts and
- * supervises terminal sessions on the VTs, and serves filesystem operations
- * and asynchronous `sh -c` executions, so a long exec or a big file read
- * never blocks terminal traffic.
- *
- * Why VTs and not ptys: in CheerpX 1.4.0 every open of /dev/ptmx yields the
- * same pty (/dev/pts/1), so a second pty session would be cross-wired with
- * the first. VTs are independent ttys with termios and job control.
- *
- * Wire protocol (version 2). Both directions are line oriented; every frame
- * starts with STX (0x02) and ends with LF. Anything outside a frame (kernel
- * messages, \r inserted by a cooked tty, echo) is ignored by the receiver.
- * Binary payloads are base64; numbers are decimal.
- *
- *   JS -> agent   "\x02" T " " id [" " num]* [" " b64] "\n"   (T upper case or '+')
- *   agent -> JS   "\x02" t " " id [" " num]* [" " b64] "\n"   (t lower case)
- *
- * Requests whose payload ("body") would make a line long are split: any number
- * of "+ id b64" lines append to the body of request `id`, then the request
- * line itself follows (its optional trailing b64 is appended too). Body
- * fields are separated by NUL bytes.
- *
- *   + id b64        append to body of request id
- *   S id vt         start a session on /dev/tty<vt>; body: cwd \0 cmd \0 K=V ...
- *                   (empty cmd = login shell)                   -> r id 0 pid
- *   Z id            the terminal size changed: SIGWINCH to the session's shell and
- *                   foreground full-screen programs (no reply; see session_winch)
- *   Y id            Ctrl-C typed: if the tty has ISIG but is non-canonical (CheerpX
- *                   then passes ^C through as data) send SIGINT to the foreground
- *                   job -> r id 0 1; otherwise -> r id 0 0 (page sends the byte)
- *   C id            close session (SIGHUP, then SIGKILL)        -> x frame
- *   K id sig        signal every process of session/exec id
- *   L id            list dir; body: path        -> d frames, r id 0 count
- *   T id            stat; body: path            -> r id 0 0 b64(record)
- *   R id            read file; body: path       -> d frames, r id 0 size
- *   W id append     write file; body: path \0 data              -> r id 0 size
- *   F id            copy file; body: src \0 dst                 -> r id 0 size
- *   M id            mkdir -p; body: path
- *   D id            rm -r (missing path is not an error); body: path
- *   N id            rename; body: from \0 to
- *   X id            exec sh -c; body: cwd \0 cmd \0 K=V ...
- *                   -> d frames (stdout+stderr), r id 0 exitcode
- *   Q id            ping -> r id 0
- *
- *   h 0 version pid       hello, sent once at start-up
- *   x id code             session ended (exit status or 128+signal)
- *   d id b64              data chunk belonging to request id
- *   r id errno num [b64]  request finished; errno 0 = success, otherwise b64
- *                         carries strerror(errno)
- *
- * Directory records (L) and stat records (T) are "type/size/mtime_ms/mode/name"
- * joined by NUL; type is f, d, o or l followed by the link target's type
- * (lf, ld, lo, l- for a dangling link). Names never contain '/' or NUL.
- *
- * Other CheerpX quirks handled here (see agent/README.md): VT sizes are global
- * and changing them raises no SIGWINCH, and SIGWINCH kills processes without a
- * handler; kill(-pgrp) is not supported (we scan /proc and compare
- * getpgid()/getsid()); opendir() succeeds on regular files.
+ * qos-agent: unprivileged Linux helper for the browser VM.
+ * Protocol v3: STX + type + request id + numeric arguments + base64 body + LF.
+ * Bodies are NUL-separated fields; + frames concatenate large bodies.
+ * S id slot cols rows (cwd, command, environment) opens a real PTY.
+ * I id (raw bytes) writes to a PTY; Z id cols rows resizes it; C/K close/signal.
+ * o id base64 streams PTY output; x id status reports its exit.
+ * X/L/T/R/W/F/M/D/N/Q retain the exec/filesystem protocol documented in README.md.
+ * B id resets stale children after restoring a machine snapshot and emits hello.
  */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -79,7 +25,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define PROTO_VERSION 2
+#define PROTO_VERSION 3
 #define VT_FIRST 2           /* session terminals: /dev/tty2 .. /dev/tty7 */
 #define VT_LAST 7
 #define MAX_KIDS 64          /* sessions + execs alive at once */
@@ -204,16 +150,20 @@ static void frame_b64(const void *d, size_t n) {
 static void frame_end(void) { buf_add(&out, "\n", 1); }
 
 /* Emits `data` as a sequence of 'd' frames, FRAME_RAW bytes each. */
-static void data_frames(long id, const void *data, size_t n) {
+static void typed_data_frames(char type, long id, const void *data, size_t n) {
   const char *p = data;
   while (n > 0) {
     size_t k = n < FRAME_RAW ? n : FRAME_RAW;
-    frame_begin('d', id);
+    frame_begin(type, id);
     frame_b64(p, k);
     frame_end();
     p += k;
     n -= k;
   }
+}
+
+static void data_frames(long id, const void *data, size_t n) {
+  typed_data_frames('d', id, data, n);
 }
 
 static void reply(long id, int err, long num, const void *d, size_t n) {
@@ -260,7 +210,8 @@ typedef struct {
   long id;
   pid_t pid;
   int fd;            /* exec: pipe read end; session: our handle on /dev/ttyN */
-  int vt;            /* session: VT number */
+  int vt;            /* logical session slot */
+  buf_t input;       /* nonblocking PTY input queue */
   int alive;         /* not reaped yet */
   int status;        /* wait status once reaped */
   double reaped_at;  /* exec: start of the EOF grace period */
@@ -268,8 +219,6 @@ typedef struct {
 } kid_t;
 
 static kid_t kids[MAX_KIDS];
-static struct termios vt_sane[VT_LAST + 1]; /* initial termios of each VT */
-static int vt_have_sane[VT_LAST + 1];
 
 typedef struct {
   long id;
@@ -296,6 +245,7 @@ static kid_t *kid_new(void) {
   return NULL;
 }
 static void kid_free(kid_t *k) {
+  buf_free(&k->input);
   if (k->fd >= 0) close(k->fd);
   memset(k, 0, sizeof *k);
   k->fd = -1;
@@ -344,7 +294,7 @@ static void on_sigchld(int s) {
   errno = e;
 }
 
-/* CheerpX has no kill(-pgrp): find members through /proc + getpgid/getsid.
+/* Find descendants through /proc so close also kills background process groups.
  * by_session != 0 selects getsid() == val, otherwise getpgid() == val.
  * Returns the number of processes signalled. */
 static int signal_group(pid_t val, int by_session, int sig) {
@@ -364,55 +314,6 @@ static int signal_group(pid_t val, int by_session, int sig) {
   }
   if (!n && kill(val, sig) == 0) n++;
   return n;
-}
-
-/* Signals the foreground job of a session's terminal (or the whole session). */
-static void signal_foreground(kid_t *k, int sig) {
-  pid_t fg = k->fd >= 0 ? tcgetpgrp(k->fd) : -1;
-  if (fg <= 0 || !signal_group(fg, 0, sig)) signal_group(k->pid, 1, sig);
-}
-
-/* Reads the command name of pid p ("comm", from /proc/p/stat). */
-static int proc_name(pid_t p, char *name, size_t size) {
-  char path[32], buf[128];
-  snprintf(path, sizeof path, "/proc/%d/stat", p);
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return 0;
-  ssize_t n = read(fd, buf, sizeof buf - 1);
-  close(fd);
-  if (n <= 0) return 0;
-  buf[n] = 0;
-  char *a = strchr(buf, '('), *b = strrchr(buf, ')');
-  if (!a || !b || b <= a || (size_t)(b - a - 1) >= size) return 0;
-  memcpy(name, a + 1, b - a - 1);
-  name[b - a - 1] = 0;
-  return 1;
-}
-
-/* CheerpX terminates a process that receives SIGWINCH without a handler
- * (Linux ignores it), and /proc has no SigCgt to tell. So the new size is
- * announced only to the session's interactive shell and to well-known
- * full-screen programs that always handle SIGWINCH. */
-static const char *WINCH_OK[] = {
-    "vim", "vi", "vim.basic", "vim.tiny", "nvim", "nano", "less", "more", "most", "man",
-    "top", "htop", "watch", "mc", "emacs", "tmux", "screen", "w3m", "lynx", "links",
-    "elinks", "tig", "ncdu", "alsamixer", "dialog", "whiptail", NULL};
-
-static void session_winch(kid_t *k) {
-  pid_t fg = k->fd >= 0 ? tcgetpgrp(k->fd) : -1;
-  DIR *d = opendir("/proc");
-  if (!d) return;
-  struct dirent *e;
-  while ((e = readdir(d))) {
-    pid_t p = atoi(e->d_name);
-    if (p <= 1 || getsid(p) != k->pid) continue;
-    int ok = p == k->pid; /* the login shell (readline redraws the prompt) */
-    char name[32];
-    if (!ok && fg > 0 && getpgid(p) == fg && proc_name(p, name, sizeof name))
-      for (int i = 0; WINCH_OK[i] && !ok; i++) ok = !strcmp(name, WINCH_OK[i]);
-    if (ok) kill(p, SIGWINCH);
-  }
-  closedir(d);
 }
 
 /* Restores default signal state in a freshly forked child. */
@@ -469,7 +370,7 @@ static int exit_code(int st) {
 /* Sessions (one per VT)                                                    */
 /* ------------------------------------------------------------------------ */
 
-static void op_session(long id, int vt, buf_t *body) {
+static void op_session(long id, int vt, int cols, int rows, buf_t *body) {
   char *f[64];
   int nf = body_fields(body, f, 64);
   const char *cwd = nf > 0 ? f[0] : "";
@@ -479,14 +380,15 @@ static void op_session(long id, int vt, buf_t *body) {
     if (kids[i].kind == K_SESSION && kids[i].vt == vt) return reply_err(id, EBUSY);
   kid_t *k = kid_new();
   if (!k) return reply_err(id, EAGAIN);
-  char dev[16];
-  snprintf(dev, sizeof dev, "/dev/tty%d", vt);
-  int h = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+  int h = posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (h < 0) return reply_err(id, errno);
-  /* Discard input a previous session left unread (tcflush is EINVAL on VTs).
-   * The page sends nothing for this session before our reply. */
-  char junk[256];
-  while (read(h, junk, sizeof junk) > 0) {}
+  if (grantpt(h) || unlockpt(h)) { int e = errno; close(h); return reply_err(id, e); }
+  char dev[128];
+  char *slave = ptsname(h);
+  if (!slave) { int e = errno; close(h); return reply_err(id, e); }
+  snprintf(dev, sizeof dev, "%s", slave);
+  struct winsize size = {.ws_col = cols, .ws_row = rows};
+  if (ioctl(h, TIOCSWINSZ, &size)) { int e = errno; close(h); return reply_err(id, e); }
   char **env = make_env(f + 2, nf > 2 ? nf - 2 : 0);
   pid_t pid = fork();
   if (pid < 0) {
@@ -501,7 +403,6 @@ static void op_session(long id, int vt, buf_t *body) {
     int s = open(dev, O_RDWR); /* first tty opened by a session leader: ctty */
     if (s < 0) _exit(126);
     ioctl(s, TIOCSCTTY, 0);
-    if (vt_have_sane[vt]) tcsetattr(s, TCSANOW, &vt_sane[vt]); /* undo a crashed raw-mode app */
     dup2(s, 0);
     dup2(s, 1);
     dup2(s, 2);
@@ -531,16 +432,16 @@ static void op_session(long id, int vt, buf_t *body) {
   reply_ok(id, pid);
 }
 
-/* Ctrl-C: CheerpX turns VINTR into SIGINT only in canonical mode. With ISIG
- * set in non-canonical mode (readline, the Python REPL, less, top) we raise
- * SIGINT ourselves; otherwise the page writes the byte as usual. */
-static void op_interrupt(long id) {
-  kid_t *k = kid_find(id);
-  struct termios t;
-  if (!k || k->kind != K_SESSION || !k->alive || tcgetattr(k->fd, &t) != 0) return reply_ok(id, 0);
-  if (!(t.c_lflag & ISIG) || (t.c_lflag & ICANON) || t.c_cc[VINTR] != 3) return reply_ok(id, 0);
-  signal_foreground(k, SIGINT);
-  reply_ok(id, 1);
+/* Queue and drain input without blocking other terminals or file requests. */
+static void flush_input(kid_t *k) {
+  while (k->input.len && k->fd >= 0) {
+    ssize_t n = write(k->fd, k->input.p, k->input.len);
+    if (n > 0) {
+      memmove(k->input.p, k->input.p + n, k->input.len - n);
+      k->input.len -= n;
+    } else if (n < 0 && errno == EINTR) continue;
+    else break;
+  }
 }
 
 static void op_close(long id) {
@@ -612,7 +513,7 @@ static int drain_exec(kid_t *k, size_t budget) {
   while (k->fd >= 0 && got < budget) {
     ssize_t r = read(k->fd, rb, sizeof rb < budget - got ? sizeof rb : budget - got);
     if (r > 0) {
-      data_frames(k->id, rb, r);
+      typed_data_frames(k->kind == K_SESSION ? 'o' : 'd', k->id, rb, r);
       got += r;
     } else if (r < 0 && errno == EINTR) {
       continue;
@@ -655,7 +556,7 @@ static int add_record(buf_t *b, int dirfd, const char *name, const char *label) 
 static void op_ls(long id, const char *path) {
   struct stat st;
   if (stat(path, &st) != 0) return reply_err(id, errno);
-  if (!S_ISDIR(st.st_mode)) return reply_err(id, ENOTDIR); /* CheerpX opendir()s files */
+  if (!S_ISDIR(st.st_mode)) return reply_err(id, ENOTDIR);
   DIR *d = opendir(path);
   if (!d) return reply_err(id, errno);
   buf_t b = {0};
@@ -828,16 +729,33 @@ static void dispatch(char *s, size_t n) {
   char t = tok[0][0];
   long id = strtol(tok[1], NULL, 10);
   if (id <= 0) return;
+  frame_begin('a', id); frame_end(); /* serial input credit: one complete frame */
 
   /* Number of numeric arguments after the id, per request type. */
-  int nnum = (t == 'S' || t == 'K' || t == 'W') ? 1 : 0;
+  int nnum = t == 'S' ? 3 : t == 'Z' ? 2 : (t == 'K' || t == 'W') ? 1 : 0;
   long num = nnum && nt > 2 ? strtol(tok[2], NULL, 10) : 0;
   char *b64 = nt > 2 + nnum ? tok[2 + nnum] : NULL;
   size_t b64len = b64 ? strlen(b64) : 0;
 
   switch (t) { /* requests without a body */
-    case 'Z': { kid_t *k = kid_find(id); if (k && k->kind == K_SESSION && k->alive) session_winch(k); return; }
-    case 'Y': return op_interrupt(id);
+    case 'Z': {
+      kid_t *k = kid_find(id);
+      if (k && k->kind == K_SESSION && k->alive && nt >= 4) {
+        struct winsize size = {.ws_col = num, .ws_row = atoi(tok[3])};
+        ioctl(k->fd, TIOCSWINSZ, &size); /* Linux sends SIGWINCH to the foreground job. */
+      }
+      return;
+    }
+    case 'B':
+      for (int i = 0; i < MAX_KIDS; i++) if (kids[i].kind != K_FREE) {
+        signal_group(kids[i].pid, 1, SIGKILL);
+        kid_free(&kids[i]);
+      }
+      for (int i = 0; i < nrjobs; i++) close(rjobs[i].fd);
+      nrjobs = 0;
+      for (int i = 0; i < MAX_BODIES; i++) if (bodies[i].id) body_drop(bodies[i].id);
+      frame_begin('h', 0); out_num(PROTO_VERSION); out_num(getpid()); frame_end();
+      return;
     case 'C': return op_close(id);
     case 'K': return op_kill(id, num);
     case 'Q': return reply_ok(id, 0);
@@ -856,7 +774,18 @@ static void dispatch(char *s, size_t n) {
   char *f[2] = {"", ""};
   body_fields(b, f, 2);
   switch (t) {
-    case 'S': op_session(id, num, b); break;
+    case 'S':
+      if (nt < 5) reply_err(id, EINVAL);
+      else op_session(id, num, atoi(tok[3]), atoi(tok[4]), b);
+      break;
+    case 'I': {
+      kid_t *k = kid_find(id);
+      if (k && k->kind == K_SESSION && k->alive) {
+        buf_add(&k->input, b->p, b->len - 1);
+        flush_input(k);
+      }
+      break;
+    }
     case 'X': op_exec(id, b); break;
     case 'L': op_ls(id, f[0]); break;
     case 'T': op_stat(id, f[0]); break;
@@ -928,6 +857,7 @@ static void reap(void) {
 }
 
 int main(void) {
+  if (geteuid() == 0 && (setgroups(0, NULL) || setgid(1000) || setuid(1000))) return 2;
   b64_init();
   for (int i = 0; i < MAX_KIDS; i++) kids[i].fd = -1;
   umask(022);
@@ -943,17 +873,6 @@ int main(void) {
     tcsetattr(0, TCSANOW, &t);
   }
   fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
-
-  /* Remember each VT's pristine settings so sessions start sane. */
-  for (int vt = VT_FIRST; vt <= VT_LAST; vt++) {
-    char dev[16];
-    snprintf(dev, sizeof dev, "/dev/tty%d", vt);
-    int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
-    if (fd >= 0) {
-      vt_have_sane[vt] = tcgetattr(fd, &vt_sane[vt]) == 0 && (vt_sane[vt].c_lflag & ICANON);
-      close(fd);
-    }
-  }
 
   signal(SIGPIPE, SIG_IGN);
   signal(SIGHUP, SIG_IGN);
@@ -979,10 +898,7 @@ int main(void) {
   struct pollfd pfd[2 + MAX_KIDS];
 
   for (;;) {
-    /* Poll the console, the SIGCHLD pipe and exec pipes; work out how long
-     * we may sleep. Exec pipes are also re-read on a short timer because
-     * CheerpX's poll() does not always report data that arrived while we
-     * were not sleeping in poll(). */
+    /* Poll serial input, child output, queued PTY input and close deadlines. */
     int np = 0;
     pfd[np++] = (struct pollfd){0, POLLIN, 0};
     pfd[np++] = (struct pollfd){sigpipe_fds[0], POLLIN, 0};
@@ -993,9 +909,8 @@ int main(void) {
       if (k->kind == K_FREE) continue;
       if (k->alive) alive = 1;
       int due_ms = -1;
-      if (k->kind == K_EXEC && k->fd >= 0) {
-        pfd[np++] = (struct pollfd){k->fd, POLLIN, 0};
-        due_ms = EXEC_POLL_MS;
+      if (k->fd >= 0) {
+        pfd[np++] = (struct pollfd){k->fd, POLLIN | (k->input.len ? POLLOUT : 0), 0};
       }
       if (k->kind == K_EXEC && !k->alive) {
         double due = k->reaped_at + EXEC_GRACE_MS;
@@ -1036,7 +951,8 @@ int main(void) {
     /* Exec output (regardless of revents, see above). */
     for (int i = 0; i < MAX_KIDS; i++) {
       kid_t *k = &kids[i];
-      if (k->kind == K_EXEC && k->fd >= 0 && !drain_exec(k, READ_BUDGET)) {
+      if (k->kind == K_SESSION && k->input.len) flush_input(k);
+      if (k->kind != K_FREE && k->fd >= 0 && !drain_exec(k, READ_BUDGET)) {
         close(k->fd);
         k->fd = -1;
       }
@@ -1055,6 +971,7 @@ int main(void) {
         /* Leftover background jobs would keep writing into a VT that the
          * next session reuses: end them with their shell. */
         signal_group(k->pid, 1, SIGKILL);
+        drain_exec(k, 1 << 20);
         frame_begin('x', k->id);
         out_num(exit_code(k->status));
         frame_end();

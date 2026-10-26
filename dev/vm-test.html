@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VM Layer Tests</title>
 <style>
@@ -99,7 +100,7 @@ let vm;
 
 let early = null; // sessions requested before vm.ready (see mainSuite)
 async function boot(config, earlySessions = 0) {
-  vm = await createVM(config, { baseUrl: new URL('../_extensions/quarto-os/', location.href).href });
+  vm = await createVM({ assetBase: '/vm-assets/', ...config }, { baseUrl: new URL('../_extensions/quarto-os/', location.href).href });
   window.vm = vm;
   vm.on('status', (m) => { statuses.push([Math.round(performance.now() - T0), m]); print(`  status: ${m}`, 'dim'); });
   // Like a page with several terminals: all ask for a session while booting.
@@ -148,7 +149,7 @@ async function mainSuite() {
     res.forEach((r, i) => {
       assert(r.text.includes(`I am ${i + 100}`), `session ${i} output: ${JSON.stringify(r.text)}`);
       assert(r.text.includes(all[i].cwd + '\r\n'), `session ${i} cwd: ${JSON.stringify(r.text)}`);
-      assert(r.text.includes(`/dev/tty${all[i].s.vt}`), `session ${i} tty (vt ${all[i].s.vt}): ${JSON.stringify(r.text)}`);
+      assert(r.text.includes('/dev/pts/'), `session ${i} tty (vt ${all[i].s.vt}): ${JSON.stringify(r.text)}`);
     });
     all.forEach((e, i) => all.forEach((f, j) => {
       if (i !== j) assert(!e.c.text.includes(`I am ${j + 100}`), `session ${j} output leaked into ${i}`);
@@ -308,8 +309,8 @@ async function mainSuite() {
     const a = await run(s1, c1, 'tty; pwd; stty size');
     const b = await run(s2, c2, 'tty; pwd; stty size');
     timings.firstSessionPromptMs = Math.round(performance.now() - t0);
-    assert(/\/dev\/tty\d+/.test(a.text) && /\/dev\/tty\d+/.test(b.text), 'tty');
-    const ttyA = /\/dev\/tty\d+/.exec(a.text)[0], ttyB = /\/dev\/tty\d+/.exec(b.text)[0];
+    assert(/\/dev\/pts\/\d+/.test(a.text) && /\/dev\/pts\/\d+/.test(b.text), 'tty');
+    const ttyA = /\/dev\/pts\/\d+/.exec(a.text)[0], ttyB = /\/dev\/pts\/\d+/.exec(b.text)[0];
     assert(ttyA !== ttyB, 'distinct ptys');
     assert(/\/home\/user\r?\n/.test(a.text) && /\/home\/user\/a\r?\n/.test(b.text), 'cwd');
     assert(/24 80/.test(a.text) && /30 100/.test(b.text), 'initial size');
@@ -579,9 +580,7 @@ async function persistSuite(phase) {
     if (phase === 'persist1') {
       assert(count === 1 && !probe, `count ${count}, probe ${!!probe}`);
       await vm.writeFile('~/persist-probe', 'kept');
-      // CheerpX writes the overlay back to IndexedDB asynchronously; after the
-      // very first boot of a fresh cache that takes several seconds.
-      await sleep(12000);
+      assert(await vm.save(), 'explicit snapshot did not complete');
     } else if (phase === 'persist2') {
       assert(probe && count === 1, `persisted VM: probe ${!!probe}, setup ran ${count}x (want 1)`);
     } else {
@@ -594,24 +593,14 @@ async function persistSuite(phase) {
 try {
   if (suite === 'main') await mainSuite();
   else if (suite === 'idle') {
-    // Proxies drop the disk WebSocket after ~35 s idle and CheerpX never
-    // reconnects on its own (vm.js's DiskSocket does). Simulate the drop.
-    const sockets = [];
-    const Native = window.WebSocket;
-    window.WebSocket = class extends Native {
-      constructor(...a) { super(...a); sockets.push(this); }
-    };
-    await test('idle: boot', () => boot({}));
-    await test('idle: cold disk reads work after the disk socket dropped', async () => {
+    await test('idle: boot without cross-origin isolation', async () => {
+      await boot({});
+      assert(!crossOriginIsolated, 'run the dev server with nocoi');
+    });
+    await test('idle: guest works without external disk connections', async () => {
       await sleep(5000);
-      const open = sockets.filter((w) => w.readyState === 1);
-      assert(open.length >= 1, 'no open disk socket');
-      for (const w of open) w.close(4000, 'simulated proxy drop');
-      await sleep(1000);
-      const t0 = performance.now();
-      const r = await within(vm.exec('python3 -c "import json, email; print(6 * 7)"'), 60000, 'python3 after drop');
-      assert(r.output === '42\n', JSON.stringify(r));
-      return `closed ${open.length} socket(s); python3 (cold) then took ${Math.round(performance.now() - t0)} ms over ${sockets.length - open.length} new connection(s)`;
+      const r = await within(vm.exec('python3 -c "import json, email; print(6 * 7)"'), 60000, 'python3 after idle');
+      assert(r.code === 0 && r.output === '42\n', JSON.stringify(r));
     });
   }
   else if (suite === 'boot') {
