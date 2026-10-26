@@ -1,10 +1,10 @@
-// Runs dev/vm-test.html in headless Chromium against the real CheerpX + disk.
+// Runs dev/vm-test.html in headless Chromium against the real v86 guest.
 //
 //   node dev/server.mjs . 8201 &      # COOP/COEP static server
 //   node dev/vm-test.mjs [--port 8201] [--suite main|idle|persist|all] [--verbose]
 //
 // Exit code 0 when every test passed.
-import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+import { chromium } from './playwright.mjs';
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -13,9 +13,10 @@ const arg = (name, dflt) => {
 const port = arg('port', '8201');
 const which = arg('suite', 'all');
 const verbose = process.argv.includes('--verbose');
+if (!['main','idle','persist','all'].includes(which)) throw new Error('Unknown suite: ' + which);
 const base = `http://localhost:${port}/dev/vm-test.html`;
 
-const browser = await chromium.launch({ args: ['--enable-features=SharedArrayBuffer'] });
+const browser = await chromium.launch();
 const context = await browser.newContext();
 const page = await context.newPage();
 page.on('console', (m) => {

@@ -7,6 +7,7 @@ project:
     - examples/*.qmd
   resources:
     - examples/assets/
+    - vm-assets/
 
 website:
   title: "Quarto OS"
@@ -39,7 +40,7 @@ website:
         href: https://github.com/jansim/quarto-os
         aria-label: "quarto-os on GitHub"
   page-footer:
-    left: "Quarto OS · VM powered by [CheerpX](https://cheerpx.io) — see [licensing](/index.qmd#licensing)"
+    left: "Quarto OS · VM powered by [v86](https://github.com/copy/v86) — see [licensing](/index.qmd#licensing)"
     right: "Built with [Quarto](https://quarto.org)"
 
 format:
@@ -56,3 +57,7 @@ format:
 
 filters:
   - quarto-os
+
+quarto-os:
+  vm:
+    asset-base: vm-assets/

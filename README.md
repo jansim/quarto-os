@@ -13,11 +13,10 @@ source control, all running in the reader's browser.
 - **Content windows** around any Markdown: images, video, code, callouts — inline,
   side by side, or floating and draggable; light and dark chrome.
 - **Apps on a real VM**: `terminal`, `vscode`, `explorer` (and `browser`), all backed by
-  one Debian VM per page, powered by [CheerpX](https://cheerpx.io) (the engine behind
-  WebVM). No server needed.
+  one Debian VM per page, powered by [v86](https://github.com/copy/v86) (BSD-2-Clause). No server needed.
 - **Desktop** with wallpaper, menubar and dock; multiple instances of each app.
 - **Launch buttons** and clickable **run snippets** that type commands into a terminal.
-- **Lazy**: pages only load a small core; xterm.js, Monaco and CheerpX are loaded when
+- **Lazy**: pages only load a small core; xterm.js, Monaco and v86 are loaded when
   a window needs them.
 
 ## Install
@@ -83,10 +82,10 @@ Desktops (`.os-desktop`) take `height` (default `480px`), `dock` (default
 ```yaml
 quarto-os:
   theme: light            # default chrome theme (light|dark)
-  coi: true               # register coi-serviceworker.js on pages using the VM
   vm:
-    disk: wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2
-    disk-type: cloud      # cloud | github | bytes
+    asset-base: https://jansim.github.io/quarto-os/vm-assets/
+    memory: 1024          # guest RAM in MiB
+    boot-timeout: 120000  # milliseconds
     persist: false        # keep VM disk changes across reloads (IndexedDB)
     cache-id: quarto-os   # IndexedDB name for the overlay
     autoboot: false       # boot on page load instead of on first VM window
@@ -102,18 +101,21 @@ The full reference is on the [docs site](https://jansim.github.io/quarto-os/#ref
   attaches the small core (`quarto-os.js` + `quarto-os.css`).
 - The core draws windows and desktops and lazy-loads app modules (`apps/*.js`) when a
   window needs them.
-- The apps share **one VM per page** (`vm/vm.js`): CheerpX runs a Debian i386 image
-  streamed block by block from a disk server. A tiny static agent inside the VM
-  (`qos-agent`, C, in `agent/`) handles file operations and starts shells; each
-  terminal runs on its own CheerpX virtual console (up to six at once).
-- CheerpX needs `SharedArrayBuffer`, i.e. a cross-origin isolated page. On hosts that
-  can't send COOP/COEP headers (GitHub Pages), pages that use the VM register
-  `coi-serviceworker.js`, which reloads the page once on the first visit.
+- The apps share **one VM per page** (`vm/vm.js`). v86 boots Debian i386 in
+  WebAssembly. The small C agent (`agent/qos-agent.c`) serves file operations,
+  executes commands as uid 1000, and multiplexes six independent Linux PTYs over
+  one serial channel. Each terminal has its own size and job control.
+- The VM works on ordinary static hosts, including GitHub Pages. It needs no
+  cross-origin isolation headers or first-visit service-worker reload.
+- Changes are temporary by default. `persist: true` saves compressed machine
+  snapshots atomically in IndexedDB; `await vm.save()` explicitly checkpoints
+  before navigating away. A restored page closes stale terminal processes and
+  reruns setup only if its script changed. Old CheerpX overlays are not imported.
 
-Limitations: at most six terminals open at once, no network inside the VM, third-party iframes (e.g. YouTube) are blocked
-on VM pages, the first boot downloads the engine and disk blocks, Chromium-based
-browsers and Firefox are recommended. Details on the
-[docs site](https://jansim.github.io/quarto-os/#limitations).
+Limitations: six terminals per page, no guest network, approximately 1 GiB of guest
+RAM, and a substantial initial guest download. Chromium and Firefox are recommended.
+Snapshots are versioned against the runtime, guest image and agent; rebuilding any
+of them starts a fresh cache. See the [docs](https://jansim.github.io/quarto-os/#limitations).
 
 ## Development
 
@@ -129,12 +131,10 @@ dev/                     test harnesses and a static dev server
   `agent/build.sh` writes `_extensions/quarto-os/vm/qos-agent` (commit the result). It
   uses `zig` from `PATH`; with the PyPI package use `ZIG="python -m ziglang" agent/build.sh`.
 - **Render the docs site**: `quarto render` (outputs to `_site/`).
-- **Serve it locally** with cross-origin isolation headers and range requests:
-
-  ```bash
-  node dev/server.mjs _site 8000          # with COOP/COEP headers
-  node dev/server.mjs _site 8000 nocoi    # like GitHub Pages (service worker path)
-  ```
+- **Build the open VM assets** (Docker + Node + curl): `bash dev/v86/prepare.sh`.
+  This writes ignored `vm-assets/` with the runtime, guest and corresponding sources.
+  See [the build guide](dev/v86/README.md) for proxy support and tests.
+- **Serve it locally**: `node dev/server.mjs _site 8000 nocoi`.
 
 - **Regenerate the demo assets** (image + looping video, needs ffmpeg + Playwright):
   `node dev/docs-assets.mjs`; the README screenshot comes from
@@ -148,13 +148,11 @@ set **Settings → Pages → Build and deployment → Source** to **GitHub Actio
 
 ## Licensing
 
-- [CheerpX](https://cheerpx.io) is proprietary software by Leaning Technologies. It is
-  **free for personal use and open-source projects; commercial or organizational use
-  requires a license** from Leaning Technologies (see <https://cheerpx.io>). Quarto OS
-  loads it at runtime from Leaning Technologies' CDN and does not redistribute it.
-- The default disk image is hosted by the WebVM project; the Debian software in it is
-  under the licenses of the respective packages.
-- Vendored/loaded libraries: [xterm.js](https://xtermjs.org) (MIT),
-  [Monaco Editor](https://microsoft.github.io/monaco-editor/) (MIT),
-  [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) (MIT).
-- The images and the video in `examples/assets/` were generated for this project.
+- [v86](https://github.com/copy/v86) is BSD-2-Clause licensed, with separately
+  licensed dependencies. Commercial use does not require a proprietary VM license.
+- SeaBIOS firmware is LGPL-3.0. The Debian guest retains each package's license,
+  including Linux, Git, Bash and BusyBox copyleft licenses. The build publishes
+  matching source packages, firmware sources, notices and build instructions at
+  [VM sources and licenses](https://jansim.github.io/quarto-os/vm-assets/).
+- xterm.js and Monaco Editor are MIT licensed. The demo images and video were
+  generated for this project.

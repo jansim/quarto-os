@@ -89,8 +89,8 @@ floating and draggable.
 
 ::: {.feature}
 ### A real terminal
-`bash` in a Debian VM powered by [CheerpX](https://cheerpx.io). `git`, `python3`,
-`vim` and friends just work — offline, in the browser.
+`bash` in a Debian VM powered by [v86](https://github.com/copy/v86). `git`, `python3`,
+the usual command-line tools just work — offline, in the browser.
 :::
 
 ::: {.feature}
@@ -220,9 +220,9 @@ presses <kbd>Enter</kbd>.
 
 ::: {.callout-tip}
 ## Previewing locally
-The VM needs a *cross-origin isolated* page. `quarto preview` doesn't send the required
-headers, so Quarto OS registers a small service worker that adds them and reloads the
-page once. Everything else is automatic — see [Limitations](#limitations).
+The VM works with `quarto preview` and ordinary static hosting. No isolation headers
+or service-worker reload are needed. Building this repository locally also requires
+`bash dev/v86/prepare.sh` to generate the VM assets.
 :::
 
 ## Reference {#reference}
@@ -357,12 +357,12 @@ are optional:
 ```yaml
 quarto-os:
   theme: light            # default window chrome: light | dark
-  coi: true               # register coi-serviceworker.js on pages that use the VM
   vm:
-    disk: wss://disks.webvm.io/debian_buster_large_permis_fixed_01-06-2026.ext2
-    disk-type: cloud      # cloud | github | bytes
+    asset-base: https://jansim.github.io/quarto-os/vm-assets/
+    memory: 1024          # guest RAM in MiB
+    boot-timeout: 120000  # milliseconds
     persist: false        # keep disk changes across reloads (IndexedDB)
-    cache-id: quarto-os   # IndexedDB name for the disk overlay
+    cache-id: quarto-os   # IndexedDB cache name
     autoboot: false       # boot on page load instead of on the first VM window
     setup: |              # bash script, run once per fresh VM as `user`
       mkdir -p ~/repo
@@ -371,11 +371,11 @@ quarto-os:
 | Option | Default | Meaning |
 |----------|----------|------------------------------------|
 | `theme` | `light` | Default window chrome theme |
-| `coi` | `true` | Make VM pages cross-origin isolated with a service worker. Set to `false` if your server already sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` |
-| `vm.disk` | WebVM's Debian image | Disk image URL |
-| `vm.disk-type` | `cloud` | `cloud` (streamed over WebSocket), `github` (chunked image hosted with your site) or `bytes` (plain HTTP with range requests) |
-| `vm.persist` | `false` | Keep changes to the disk in IndexedDB so they survive reloads |
-| `vm.cache-id` | `quarto-os` | Name of the IndexedDB overlay — use different ids for unrelated lessons |
+| `vm.asset-base` | Project-hosted VM assets | Base URL containing the runtime, firmware, kernel, initramfs and manifest; relative paths resolve from the Quarto project root |
+| `vm.memory` | `1024` | Guest RAM in MiB (256–2048); the supplied image uses 1024 |
+| `vm.boot-timeout` | `120000` | Maximum boot time in milliseconds |
+| `vm.persist` | `false` | Keep compressed machine snapshots in IndexedDB; call `await vm.save()` before leaving when the latest changes must be retained |
+| `vm.cache-id` | `quarto-os` | Cache name; use separate ids for unrelated lessons. Runtime/image/agent changes invalidate snapshots |
 | `vm.autoboot` | `false` | Boot the VM as soon as the page loads |
 | `vm.setup` | — | Shell script run once in a fresh VM before any app attaches. Perfect for `git config`, sample files and folders |
 
@@ -398,36 +398,25 @@ const { output } = await vm.exec("wc -c notes.txt", { cwd: "~" });
 
 ## How the VM works {#how-it-works}
 
-**CheerpX in the browser.** The apps are backed by
-[CheerpX](https://cheerpx.io), the x86-to-WebAssembly virtualization engine by Leaning
-Technologies that also powers [WebVM](https://webvm.io). It runs an unmodified 32-bit
-**Debian** (i386) — with `bash`, `git`, `python3`, `nano`, `vim` and the usual
-command-line tools — entirely in the reader's browser. Nothing runs on a server and
-nothing a student types leaves their machine.
+**Open emulator in the browser.** [v86](https://github.com/copy/v86), licensed under
+BSD-2-Clause, boots an actual Debian i386 Linux kernel in WebAssembly. Bash, Git
+and Python run locally in the reader's browser. No application server or guest
+network is involved.
 
-**One VM per page.** All terminals, editors and explorers on a page talk to the *same*
-machine. A file created in one terminal immediately shows up in the explorer and in
-VS Code; a commit made in the terminal shows up in the editor's source control. A tiny
-agent inside the VM (`qos-agent`, a 48 KB static C binary) serves the file operations
-and starts the shells; each terminal runs on its own CheerpX virtual console, so
-keystrokes go straight to `bash` without any extra hop.
+**One VM per page.** All apps share the same filesystem and processes. The small
+`qos-agent` runs as `user` (uid 1000), handles files and commands, and gives each
+terminal an independent Linux PTY. Serial frames multiplex the terminals and file
+operations; flow control prevents large pastes from overflowing the serial device.
 
-**Streaming disk.** The disk image is not downloaded up front: CheerpX fetches only the
-blocks that are actually read and caches them in the browser, so the first boot takes
-a few seconds longer and later visits are fast. Changes are kept in memory and vanish
-on reload, unless `vm.persist: true` stores them in IndexedDB.
+**Persistence.** Changes vanish on reload unless `vm.persist` is enabled. Compressed
+machine snapshots include mutable host–guest files and commit atomically to
+IndexedDB. `await vm.save()` explicitly checkpoints changes. Restoring a snapshot
+closes old terminal processes and reapplies defaults/setup before opening new ones.
+Rebuilding the runtime, guest or agent invalidates older snapshots.
 
-**Lazy loading.** Every page only loads the small core (`quarto-os.js` +
-`quarto-os.css`, about 60 KB before compression). The heavy parts — xterm.js for terminals, Monaco
-(the editor of VS Code) for the editor, CheerpX and the VM layer — are loaded the
-first time a window needs them, e.g. when a terminal scrolls into view or someone
-clicks a dock icon. Pages with only content windows never download any of it.
-
-**Cross-origin isolation.** CheerpX needs `SharedArrayBuffer`, which browsers only
-enable on *cross-origin isolated* pages. Static hosts such as GitHub Pages can't set
-the required headers, so pages that use the VM register
-[coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker), which adds them and
-reloads the page once on the first visit.
+**Lazy loading and static hosting.** Content windows load only the small core. v86,
+xterm.js and Monaco load when apps need them. Ordinary static hosting works without
+cross-origin isolation, a VM disk WebSocket or a first-visit service-worker reload.
 
 ## Teaching tips {#teaching-tips}
 
@@ -443,48 +432,33 @@ reloads the page once on the first visit.
 - **Name your terminals.** With several terminals on a page, give each an `#id` and
   use `target` so snippets end up in the right one.
 - **Warm up before class.** Open the page once before the lecture so the VM engine and
-  disk blocks are cached; for talks consider `autoboot: true` on the slide deck.
+  guest assets are cached; for talks consider `autoboot: true` on the slide deck.
 - **Have a fallback.** Keep a screenshot or recording handy for classroom machines with
   old or locked-down browsers.
 
 ## Limitations {#limitations}
 
-- **One reload on first visit.** Pages that use the VM are made cross-origin isolated by
-  a service worker, which needs one automatic reload the first time a page is opened.
-  Serving your site with the COOP/COEP headers yourself avoids it (`coi: false`).
-- **No third-party iframes on VM pages.** Under COEP, embeds like YouTube videos, maps
-  or other sites' pages (including the `browser` app pointing at them) are blocked on
-  pages that use the VM. Self-host such media or put it on a page without VM apps.
-  Pages with only content windows are not affected.
-- **At most six terminals at once.** CheerpX provides six virtual consoles, so a page
-  can have up to six terminals (including VS Code's integrated terminal) open at the
-  same time; a seventh shows a message asking to close one. Terminals in windows that
-  never scrolled into view don't count.
-- **No network inside the VM.** `apt install`, `pip install`, `curl` or `git clone`
-  from the internet don't work. Create what you need in `vm.setup`, or use a custom
-  disk image that already contains it.
-- **First boot downloads.** The VM engine and the disk blocks it touches are downloaded
-  on first use (several megabytes); afterwards they come from the browser cache.
-- **An older Debian.** The default image is Debian buster (i386): e.g. git 2.20, which
-  predates `git switch`/`git restore` — use `git checkout`.
-- **Browsers.** Recent Chromium-based browsers (Chrome, Edge, Brave…) and Firefox are
-  recommended. Other browsers and phones may work but are slower and use a lot of
-  memory.
+- **Six terminals per page**, including integrated editor terminals. Each has its
+  own PTY, dimensions and job control; a seventh asks you to close one first.
+- **No guest network.** Prepare files with `vm.setup` or build a custom guest.
+- **Initial download and memory.** The default guest downloads tens of megabytes
+  and reserves 1 GiB of RAM. Cold boot took roughly 25–30 seconds on the development
+  machine. Saved snapshots take additional storage and are not portable between
+  runtime, image or agent versions.
+- **Saving before navigation.** Persistence checkpoints after activity and attempts
+  a save on page exit. Browsers can terminate a page before asynchronous work finishes;
+  await `vm.save()` when the latest changes must be durable.
+- **Browsers.** Recent Chromium and Firefox are recommended. Phones and other
+  memory-constrained devices may be slow or unable to run the guest.
 
 ## Licensing {#licensing}
 
-Quarto OS bundles or loads several third-party components:
-
-- **CheerpX** is proprietary software by [Leaning Technologies](https://leaningtech.com).
-  It is free for personal use and for open-source projects; **commercial or
-  organizational use requires a license** from Leaning Technologies — see
-  [cheerpx.io](https://cheerpx.io). Quarto OS loads it at runtime from Leaning
-  Technologies' CDN and does not redistribute it.
-- The default disk image is a Debian system hosted by the WebVM project; the software
-  in it is under the licenses of the respective Debian packages.
-- [xterm.js](https://xtermjs.org), [Monaco Editor](https://microsoft.github.io/monaco-editor/)
-  and [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) are MIT
-  licensed.
+The VM emulator, [v86](https://github.com/copy/v86), is BSD-2-Clause licensed and
+permits commercial use. Its dependencies retain their own notices. SeaBIOS is
+LGPL-3.0, and the Debian guest packages retain their individual licenses, including
+Linux, Bash, Git and BusyBox copyleft licenses. Matching source archives, version
+inventories, license texts and build scripts are published with the
+[VM assets](vm-assets/index.html). xterm.js and Monaco Editor are MIT licensed.
 
 The demo images and the video on this site were generated for it and may be reused
 freely.
