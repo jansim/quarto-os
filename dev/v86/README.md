@@ -19,7 +19,8 @@ bash dev/v86/prepare.sh
 The script installs pinned `v86@0.5.472` and Playwright in ignored
 `dev/v86/out/`, builds a Debian guest and copies only publication assets into
 ignored `vm-assets/`. It uses the Debian base manifest pinned in `Dockerfile` and
-signed APT repositories. The guest package versions follow bookworm; builds are
+signed APT repositories. Source collection is cached in a separate build stage,
+so changing profiles or the trimming script does not re-download the sources. The guest package versions follow bookworm; builds are
 not yet bit-for-bit reproducible against a frozen Debian snapshot.
 
 `Dockerfile` assembles i386 packages using an amd64 builder without executing
@@ -45,11 +46,46 @@ The static publication directory contains:
   v86/firmware sources, license texts, source inventory and build instructions.
 
 The source archive is substantial (approximately 462 MiB in the tested build).
-The guest is approximately 71 MiB compressed; cold boot measured about 25–30 s
-with 1 GiB of guest memory. The Pages workflow builds and publishes these assets;
+The default slim guest is approximately 47.1 MiB compressed (116 MiB expanded),
+with approximately 55 MiB downloaded including the kernel and emulator. It uses
+512 MiB of guest memory. The previous full guest was 70.8 MiB compressed
+(201 MiB expanded), required 78.7 MiB of startup assets, and used 1 GiB of RAM. The Pages workflow builds and publishes these assets;
 VM defaults use `https://jansim.github.io/quarto-os/vm-assets/`. Local docs configure
 a project-relative `vm-assets/` path, resolved correctly for nested Quarto pages.
 Other sites can self-host the same directory and configure `vm.asset-base`.
+
+## Guest profiles
+
+The default `slim` profile keeps Bash, Python, core Git, shared libraries,
+terminfo, C.UTF-8 support and package copyright notices. A short, commented
+`slim-guest.sh` removes Perl and its SDK, udev hardware databases, initramfs-building
+utilities, Git network/mail helpers and Scalar. The custom init already mounts
+Linux pseudo-filesystems and loads the necessary drivers directly. The build
+fails if the compressed slim guest exceeds 50 MiB, guarding against size regressions.
+
+Supported Git workflows include local init, status, add, commit, diff, log,
+branches, stash, local clone, fsck and archive. Optional Perl-based tools such as
+`git filter-branch` require the full profile:
+
+```sh
+V86_GUEST_PROFILE=full bash dev/v86/prepare.sh
+```
+
+Use `vm.memory: 1024` with that guest; an explicit value is needed because the
+runtime defaults to 512 MiB for the slim image. The full profile bypasses the
+trimming script and slim size budget. Both profiles publish the same complete
+source inventory, including notices for the original signed packages. These
+source archives are downloaded only on request, never during VM startup.
+
+This remains a complete initramfs download. On-demand 9p rootfs loading could
+further improve startup traffic but is a separate storage/boot change. Keeping
+Debian and one visible trimming script is the most approachable incremental
+option. v86 also provides an upstream [Alpine guest recipe](https://github.com/copy/v86/tree/master/tools/docker/alpine);
+Alpine or Buildroot could reduce the base further, at the cost of switching the
+guest package ecosystem and validating a different kernel and libc.
+
+Rebuilding the guest changes its manifest hash and invalidates existing machine
+snapshots. Export important guest files before deploying the new image.
 
 ## Tests
 
@@ -67,6 +103,8 @@ node dev/server.mjs . 8203 nocoi
 node dev/vm-test.mjs --port 8203 --suite all
 node dev/apps-e2e.mjs --port 8203 --real
 node dev/v86/lifecycle.mjs --port 8203
+node --test dev/v86/hash.test.mjs
+node dev/v86/http-origin.mjs --port 8203
 ```
 
 Before the app suite, prepare the ignored Quarto fixtures:
@@ -86,7 +124,8 @@ the platform's certificate store available; never disable certificate validation
 `smoke.mjs` separately checks the guest's shell, 9p exchange, PTY, Git and snapshot
 primitives. Run it with `--assets dev/v86/out` and
 `--playwright "$PWD/dev/v86/out/node_modules/playwright/index.mjs"`; optionally pass
-`--chromium /usr/bin/chromium`. It starts and stops its own server without COOP/COEP.
+`--chromium /usr/bin/chromium`. Use `--memory 1024 --full-profile` to also
+verify the full profile's Perl-based Git helpers. It starts and stops its own server without COOP/COEP.
 
 ## Persistence and protocol
 
@@ -112,3 +151,15 @@ The old `disk`, `disk-type` and `cheerpx` settings are rejected with a migration
 error; provide a built v86 asset directory with `asset-base` instead. The old
 `coi` setting is no longer needed. Old IndexedDB overlays are left intact but
 are not imported; v86 uses a separate database suffix (`:v86`).
+
+## Ordinary HTTP hosting
+
+Web Crypto's `crypto.subtle` is unavailable on HTTP origins other than trustworthy
+localhost origins. Agent cache identities use Web Crypto when available and a
+lazy-loaded, vendored Noble Hashes 2.0.1 implementation otherwise. Both compute
+identical SHA-256 values. No COOP/COEP headers or service-worker reload are needed.
+
+`http-origin.mjs` serves local assets under a virtual `.test` HTTP origin and asserts that
+`isSecureContext` is false and `crypto.subtle` is absent, and tests real boot,
+Python execution, persistence across reloads, and terminal error text. The hash
+unit tests compare both paths against standard vectors and Node's SHA-256.

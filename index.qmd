@@ -359,7 +359,7 @@ quarto-os:
   theme: light            # default window chrome: light | dark
   vm:
     asset-base: https://jansim.github.io/quarto-os/vm-assets/
-    memory: 1024          # guest RAM in MiB
+    memory: 512           # guest RAM in MiB
     boot-timeout: 120000  # milliseconds
     persist: false        # keep disk changes across reloads (IndexedDB)
     cache-id: quarto-os   # IndexedDB cache name
@@ -372,7 +372,7 @@ quarto-os:
 |----------|----------|------------------------------------|
 | `theme` | `light` | Default window chrome theme |
 | `vm.asset-base` | Project-hosted VM assets | Base URL containing the runtime, firmware, kernel, initramfs and manifest; relative paths resolve from the Quarto project root |
-| `vm.memory` | `1024` | Guest RAM in MiB (256–2048); the supplied image uses 1024 |
+| `vm.memory` | `512` | Guest RAM in MiB (256–2048); use 1024 for the optional full guest |
 | `vm.boot-timeout` | `120000` | Maximum boot time in milliseconds |
 | `vm.persist` | `false` | Keep compressed machine snapshots in IndexedDB; call `await vm.save()` before leaving when the latest changes must be retained |
 | `vm.cache-id` | `quarto-os` | Cache name; use separate ids for unrelated lessons. Runtime/image/agent changes invalidate snapshots |
@@ -441,9 +441,12 @@ cross-origin isolation, a VM disk WebSocket or a first-visit service-worker relo
 - **Six terminals per page**, including integrated editor terminals. Each has its
   own PTY, dimensions and job control; a seventh asks you to close one first.
 - **No guest network.** Prepare files with `vm.setup` or build a custom guest.
-- **Initial download and memory.** The default guest downloads tens of megabytes
-  and reserves 1 GiB of RAM. Cold boot took roughly 25–30 seconds on the development
-  machine. Saved snapshots take additional storage and are not portable between
+- **Slim tool selection.** Bash, Python and offline core Git workflows are included.
+  Optional Perl-based Git tools and network helpers are omitted. Build with
+  `V86_GUEST_PROFILE=full` and configure `vm.memory: 1024` if your lesson needs them.
+- **Initial download and memory.** The default slim guest downloads about 55 MiB including
+  the kernel and emulator, and reserves 512 MiB of RAM. Startup depends on
+  device speed and download bandwidth. Saved snapshots take additional storage and are not portable between
   runtime, image or agent versions.
 - **Saving before navigation.** Persistence checkpoints after activity and attempts
   a save on page exit. Browsers can terminate a page before asynchronous work finishes;
