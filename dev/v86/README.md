@@ -16,7 +16,8 @@ Requirements: Docker, Node, npm, curl. From the repository root:
 bash dev/v86/prepare.sh
 ```
 
-The script installs pinned `v86@0.5.472` and Playwright in ignored
+The script uses `install-tools.sh` and the committed npm lockfile to install
+pinned `v86@0.5.472` and Playwright in ignored
 `dev/v86/out/`, builds a Debian guest and copies only publication assets into
 ignored `vm-assets/`. It uses the Debian base manifest pinned in `Dockerfile` and
 signed APT repositories. Source collection is cached in a separate build stage,
@@ -25,31 +26,36 @@ not yet bit-for-bit reproducible against a frozen Debian snapshot.
 
 `Dockerfile` assembles i386 packages using an amd64 builder without executing
 32-bit host programs. It keeps the modules required for virtio/9p and retains
-package copyright notices. `init` mounts Linux pseudo-filesystems and the 9p
-share, creates uid/gid 1000, initializes the user shell, and exposes a bootstrap
-serial prompt. The browser copies the separately built agent through 9p and
+package copyright notices. `boot-init` mounts the on-demand 9p root; `init` mounts
+Linux pseudo-filesystems, creates uid/gid 1000, initializes the user shell, and
+exposes a bootstrap serial prompt. The browser copies the separately built agent through 9p and
 starts it as `user`. Rebuild that agent with `ZIG="python -m ziglang" sh agent/build.sh`
 after changing its C source (pinned Zig version: 0.14.1).
 
 The script leaves the Docker image `quarto-os-v86-research` and build cache for
 future runs, but removes its temporary stopped container. Supply a different
-working directory as its first argument. For this cloud machine's injected proxy,
-use `V86_DOCKER_NETWORK=host`; it reuses the proxy and adds its existing hostname
-mapping without printing credentials or changing network policy.
+working directory as its first argument. Docker uses its configured build proxy.
+The script adds the configured proxy hostname
+mapping when needed, without printing credentials. `V86_DOCKER_NETWORK` is an
+optional Docker network override for environments that require one.
 
 The static publication directory contains:
 
 - v86 JS/WASM and SeaBIOS firmware, pinned to runtime 0.5.472 and firmware 1.16.2;
-- the Linux kernel and compressed initramfs;
+- the Linux kernel, a tiny boot initramfs, `fs.json` metadata and Zstandard-compressed
+  content-addressed `rootfs/` files;
+- a gzip-compressed clean boot snapshot, captured before agent or lesson setup;
 - a manifest hashing the kernel and guest, used to invalidate incompatible caches;
 - exact Debian source packages, including Built-Using/static components, plus
   v86/firmware sources, license texts, source inventory and build instructions.
 
 The source archive is substantial (approximately 462 MiB in the tested build).
-The default slim guest is approximately 47.1 MiB compressed (116 MiB expanded),
-with approximately 55 MiB downloaded including the kernel and emulator. It uses
-512 MiB of guest memory. The previous full guest was 70.8 MiB compressed
-(201 MiB expanded), required 78.7 MiB of startup assets, and used 1 GiB of RAM. The Pages workflow builds and publishes these assets;
+The default slim guest uses 512 MiB of guest memory. Previously its entire
+47.1 MiB compressed initramfs (116 MiB expanded) downloaded before Linux booted,
+with approximately 55 MiB of startup assets including the kernel and emulator.
+The new layout loads root files on demand; the roughly 21.5 MiB clean snapshot
+also skips kernel boot. See the startup measurement command below. The Pages workflow
+builds and publishes these assets;
 VM defaults use `https://jansim.github.io/quarto-os/vm-assets/`. Local docs configure
 a project-relative `vm-assets/` path, resolved correctly for nested Quarto pages.
 Other sites can self-host the same directory and configure `vm.asset-base`.
@@ -77,10 +83,44 @@ trimming script and slim size budget. Both profiles publish the same complete
 source inventory, including notices for the original signed packages. These
 source archives are downloaded only on request, never during VM startup.
 
-This remains a complete initramfs download. On-demand 9p rootfs loading could
-further improve startup traffic but is a separate storage/boot change. Keeping
-Debian and one visible trimming script is the most approachable incremental
-option. v86 also provides an upstream [Alpine guest recipe](https://github.com/copy/v86/tree/master/tools/docker/alpine);
+## Startup and on-demand files
+
+The build generates v86 filesystem metadata and individually compressed backing
+files using the pinned upstream tools in `tools/`. A tiny initramfs mounts this
+9p root. `/mnt/host` points to writable `/data`; user files and mutable root files
+are included in persisted machine snapshots.
+
+`build-boot-state.mjs` boots the same guest in Node, stops at the root bootstrap
+prompt after outstanding filesystem reads finish, and saves a clean state. It
+contains no agent, lesson setup or user data. Its content-addressed filename and
+SHA-256 checksum appear in the manifest. At startup, a compatible persisted user
+snapshot takes precedence; otherwise the browser verifies and restores the clean
+snapshot. Missing or corrupt clean snapshots fail startup with an error. A
+different `vm.memory` also reports an error; use matching memory or explicitly
+disable the public snapshot for kernel boot. The guest clock is synchronized
+before starting the agent and lesson setup.
+
+Set `vm.boot-snapshot: false` to bypass the public snapshot while keeping
+on-demand loading. This trades slower kernel boot for a smaller download on fast
+CPUs or slow connections. It does not disable persisted user snapshots.
+Decompressing/restoring any snapshot needs additional temporary browser memory;
+guest RAM is still 512 MiB, and browser process memory can be higher.
+
+Uncached root files require a connection to the static asset host, even after
+boot. This is separate from guest networking, which remains unavailable. Keep
+old content-addressed backing files available while older pages or persisted
+snapshots are in use; versioned asset directories are recommended for custom
+hosting. Browser HTTP caching may help repeat visits but does not guarantee an
+offline VM.
+
+Run `node dev/v86/startup.mjs --port 8203` for fresh-context startup measurements
+and missing/corrupt/memory-mismatched snapshot error checks. It reports local-machine readiness
+time and decoded VM asset response bytes; it does not model Internet latency or
+HTTP compression. Python fault-in and guest clock correctness are checked after
+readiness. See the PR for measurements against the previous initramfs build.
+
+Debian and one visible trimming script remain the simplest maintenance path.
+v86 also provides an upstream [Alpine guest recipe](https://github.com/copy/v86/tree/master/tools/docker/alpine);
 Alpine or Buildroot could reduce the base further, at the cost of switching the
 guest package ecosystem and validating a different kernel and libc.
 
@@ -103,6 +143,7 @@ node dev/server.mjs . 8203 nocoi
 node dev/vm-test.mjs --port 8203 --suite all
 node dev/apps-e2e.mjs --port 8203 --real
 node dev/v86/lifecycle.mjs --port 8203
+node dev/v86/startup.mjs --port 8203
 node --test dev/v86/hash.test.mjs
 node dev/v86/http-origin.mjs --port 8203
 ```
@@ -163,3 +204,31 @@ identical SHA-256 values. No COOP/COEP headers or service-worker reload are need
 `isSecureContext` is false and `crypto.subtle` is absent, and tests real boot,
 Python execution, persistence across reloads, and terminal error text. The hash
 unit tests compare both paths against standard vectors and Node's SHA-256.
+
+## CI caching
+
+The Pages workflow caches the complete `vm-assets/` directory, including the
+matching guest sources, filesystem metadata and clean boot snapshot. An exact
+cache hit skips Docker and snapshot generation; browser tests and site rendering
+still run, and the Linux agent is rebuilt from the current source every time.
+The cache key includes guest/build scripts, Docker inputs, the pinned tool
+lockfile, runtime filesystem tools, runner OS/architecture and the UTC ISO week.
+There are no partial asset restores. The first build in a new week rebuilds the
+guest from the rolling Debian repositories. For an earlier refresh, delete the
+matching `vm-assets-v1-...` cache under the repository's Actions caches.
+
+npm and pip downloads are cached by their committed dependency files. The
+Playwright browser cache is keyed by the npm lockfile and runner OS/architecture;
+`playwright install --with-deps chromium` still runs to ensure OS libraries are
+present. Node modules, Python environments and rendered site output are not
+cached. On an asset-cache hit, `install-tools.sh` installs only the pinned npm
+packages needed by the browser tests, without Docker or source downloads.
+
+GitHub's cache scope rules apply: PRs can read eligible default-branch caches,
+while their saved caches remain scoped to their PR merge ref. A cold cache still
+runs the complete build. The asset cache is roughly 540 MiB (mostly corresponding
+sources); GitHub may evict it under its cache quota. Actual warm-run savings need
+to be measured in Actions. Tests and rendering remain part of every warm run.
+
+PR checks have their own concurrency group and superseded PR runs are cancelled.
+Push/manual publishing runs remain serialized and are not cancelled in progress.

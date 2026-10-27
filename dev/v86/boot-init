@@ -1,0 +1,12 @@
+#!/bin/busybox sh
+# Tiny initramfs: load 9p and switch to the on-demand, read-write root filesystem.
+set -e
+/bin/busybox mount -t devtmpfs devtmpfs /dev
+exec </dev/ttyS0 >/dev/ttyS0 2>&1
+/bin/busybox modprobe virtio_pci
+/bin/busybox modprobe 9p
+/bin/busybox modprobe 9pnet_virtio
+/bin/busybox mkdir -p /newroot
+/bin/busybox mount -t 9p -o trans=virtio,version=9p2000.L,cache=loose host9p /newroot
+/bin/busybox mount --move /dev /newroot/dev
+exec /bin/busybox switch_root /newroot /init

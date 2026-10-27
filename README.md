@@ -85,6 +85,7 @@ quarto-os:
   vm:
     asset-base: https://jansim.github.io/quarto-os/vm-assets/
     memory: 512           # guest RAM in MiB
+    boot-snapshot: true  # restore the prebuilt clean boot state
     boot-timeout: 120000  # milliseconds
     persist: false        # keep VM disk changes across reloads (IndexedDB)
     cache-id: quarto-os   # IndexedDB name for the overlay
@@ -104,7 +105,8 @@ The full reference is on the [docs site](https://jansim.github.io/quarto-os/#ref
 - The apps share **one VM per page** (`vm/vm.js`). v86 boots Debian i386 in
   WebAssembly. The small C agent (`agent/qos-agent.c`) serves file operations,
   executes commands as uid 1000, and multiplexes six independent Linux PTYs over
-  one serial channel. Each terminal has its own size and job control.
+  one serial channel. A prebuilt boot snapshot skips kernel startup, and root
+  files load on demand from the static asset host. Each terminal has its own size and job control.
 - The VM works on ordinary static hosts, including GitHub Pages. It needs no
   cross-origin isolation headers or first-visit service-worker reload.
 - Changes are temporary by default. `persist: true` saves compressed machine
@@ -113,7 +115,8 @@ The full reference is on the [docs site](https://jansim.github.io/quarto-os/#ref
   reruns setup only if its script changed. Old CheerpX overlays are not imported.
 
 Limitations: six terminals per page, no guest network, 512 MiB of guest
-RAM, and a substantial initial guest download. Chromium and Firefox are recommended.
+RAM, plus temporary snapshot memory. Uncached root files require access to the
+static asset host after boot. Chromium and Firefox are recommended.
 Snapshots are versioned against the runtime, guest image and agent; rebuilding any
 of them starts a fresh cache. See the [docs](https://jansim.github.io/quarto-os/#limitations).
 

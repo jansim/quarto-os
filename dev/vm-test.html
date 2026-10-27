@@ -624,7 +624,7 @@ try {
   }
   else if (suite === 'boot') {
     await test('boot only (window.vm for manual testing)', () => boot({
-      persist: params.get('persist') === '1', cacheId: params.get('cache') || undefined, disk: params.get('disk') || undefined,
+      persist: params.get('persist') === '1', cacheId: params.get('cache') || undefined, disk: params.get('disk') || undefined, bootSnapshot: params.get('boot-snapshot') !== '0',
     }));
   }
   else await persistSuite(suite);
