@@ -87,6 +87,7 @@ jobs:
           node dev/server.mjs . 8203 nocoi > /tmp/quarto-os-server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
+          node dev/window-layout.mjs --port 8203
           node --test dev/v86/hash.test.mjs
           node dev/vm-test.mjs --port 8203 --suite all
           node dev/v86/lifecycle.mjs --port 8203
