@@ -12,10 +12,11 @@ permissions:
   pages: write
   id-token: write
 
-# One deployment at a time; don't cancel a deployment that is already running.
+# PRs run independently and superseded PR checks can stop. Publishing remains
+# serialized across pushes and manual runs; never cancel a deployment in flight.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -32,18 +33,46 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: dev/v86/package-lock.json
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: agent/requirements-build.txt
 
       - name: Build Linux agent
         run: |
-          python -m pip install ziglang==0.14.1
+          python -m pip install -r agent/requirements-build.txt
           ZIG="python -m ziglang" sh agent/build.sh
 
+      # Refresh rolling Debian packages on the first build of each UTC ISO week.
+      # No restore prefix: all publication assets must match the build inputs.
+      - name: Select VM cache generation
+        id: vm-generation
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache VM publication assets
+        id: vm-assets
+        uses: actions/cache@v4
+        with:
+          path: vm-assets
+          key: vm-assets-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.vm-generation.outputs.week }}-${{ hashFiles('dev/v86/Dockerfile', 'dev/v86/.dockerignore', 'dev/v86/init', 'dev/v86/boot-init', 'dev/v86/*.sh', 'dev/v86/build-boot-state.mjs', 'dev/v86/package*.json', 'dev/v86/tools/**') }}
+
       - name: Build v86 runtime, guest and corresponding sources
+        if: steps.vm-assets.outputs.cache-hit != 'true'
         run: bash dev/v86/prepare.sh
+
+      - name: Install tools for cached VM assets
+        if: steps.vm-assets.outputs.cache-hit == 'true'
+        run: bash dev/v86/install-tools.sh
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dev/v86/package-lock.json') }}
 
       - name: Prepare browser fixtures
         run: |

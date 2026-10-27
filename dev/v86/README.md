@@ -16,7 +16,8 @@ Requirements: Docker, Node, npm, curl. From the repository root:
 bash dev/v86/prepare.sh
 ```
 
-The script installs pinned `v86@0.5.472` and Playwright in ignored
+The script uses `install-tools.sh` and the committed npm lockfile to install
+pinned `v86@0.5.472` and Playwright in ignored
 `dev/v86/out/`, builds a Debian guest and copies only publication assets into
 ignored `vm-assets/`. It uses the Debian base manifest pinned in `Dockerfile` and
 signed APT repositories. Source collection is cached in a separate build stage,
@@ -203,3 +204,31 @@ identical SHA-256 values. No COOP/COEP headers or service-worker reload are need
 `isSecureContext` is false and `crypto.subtle` is absent, and tests real boot,
 Python execution, persistence across reloads, and terminal error text. The hash
 unit tests compare both paths against standard vectors and Node's SHA-256.
+
+## CI caching
+
+The Pages workflow caches the complete `vm-assets/` directory, including the
+matching guest sources, filesystem metadata and clean boot snapshot. An exact
+cache hit skips Docker and snapshot generation; browser tests and site rendering
+still run, and the Linux agent is rebuilt from the current source every time.
+The cache key includes guest/build scripts, Docker inputs, the pinned tool
+lockfile, runtime filesystem tools, runner OS/architecture and the UTC ISO week.
+There are no partial asset restores. The first build in a new week rebuilds the
+guest from the rolling Debian repositories. For an earlier refresh, delete the
+matching `vm-assets-v1-...` cache under the repository's Actions caches.
+
+npm and pip downloads are cached by their committed dependency files. The
+Playwright browser cache is keyed by the npm lockfile and runner OS/architecture;
+`playwright install --with-deps chromium` still runs to ensure OS libraries are
+present. Node modules, Python environments and rendered site output are not
+cached. On an asset-cache hit, `install-tools.sh` installs only the pinned npm
+packages needed by the browser tests, without Docker or source downloads.
+
+GitHub's cache scope rules apply: PRs can read eligible default-branch caches,
+while their saved caches remain scoped to their PR merge ref. A cold cache still
+runs the complete build. The asset cache is roughly 540 MiB (mostly corresponding
+sources); GitHub may evict it under its cache quota. Actual warm-run savings need
+to be measured in Actions. Tests and rendering remain part of every warm run.
+
+PR checks have their own concurrency group and superseded PR runs are cancelled.
+Push/manual publishing runs remain serialized and are not cancelled in progress.

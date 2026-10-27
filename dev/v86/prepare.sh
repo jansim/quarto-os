@@ -8,7 +8,7 @@ out=$(cd "$out" && pwd)
 profile=${V86_GUEST_PROFILE:-slim}
 case "$profile" in slim|full) ;; *) echo "Unknown V86_GUEST_PROFILE: $profile" >&2; exit 1 ;; esac
 
-npm install --cache "$out/npm-cache" --prefix "$out" --no-audit --no-fund v86@0.5.472 playwright@1.62.0
+bash "$here/install-tools.sh" "$out"
 revision=cc37f35c43bf14865d74ad76879ecf9410f69eb1
 for file in seabios.bin vgabios.bin COPYING.LESSER fetch-and-build-seabios.sh; do
   curl -fsSL "https://raw.githubusercontent.com/copy/v86/$revision/bios/$file" -o "$out/$file"
