@@ -2,6 +2,8 @@
 // The unprivileged qos-agent multiplexes filesystem requests and six Linux PTYs
 // over a raw serial console. v86 is BSD-2-Clause licensed and needs no COOP/COEP.
 
+import {sha256Hex} from './sha256.js';
+
 const V86_VERSION = '0.5.472';
 const DEFAULT_ASSETS = 'https://jansim.github.io/quarto-os/vm-assets/';
 const HOME = '/home/user';
@@ -202,7 +204,7 @@ class VM {
     const bool = (v) => v === true || v === 'true';
     this.config = {
       assetBase: String(pick('assetBase', 'asset-base', DEFAULT_ASSETS)),
-      memory: Number(pick('memory', 'memory', 1024)),
+      memory: Number(pick('memory', 'memory', 512)),
       bootTimeout: Number(pick('bootTimeout', 'boot-timeout', 120000)),
       persist: bool(pick('persist', 'persist', false)),
       cacheId: String(pick('cacheId', 'cache-id', 'quarto-os')),
@@ -319,7 +321,7 @@ class VM {
       get(asset('manifest.json'), 'json'), get(this._agentUrl, 'arrayBuffer'),
     ]);
     if (manifest.runtime !== V86_VERSION || !manifest.image) throw new Error('Incompatible v86 asset manifest; rebuild the VM assets');
-    const agentHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', agent))].map(x => x.toString(16).padStart(2, '0')).join('');
+    const agentHash = await sha256Hex(agent);
     this._signature = `${V86_VERSION}/${manifest.image}/${agentHash}/${this.config.memory}/protocol-3`;
     let snapshot = null;
     if (this.config.persist) {
