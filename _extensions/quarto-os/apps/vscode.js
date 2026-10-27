@@ -8,7 +8,8 @@ import {
 } from './common.js';
 import { createTerminal } from './terminal.js';
 
-export const MONACO_VERSION = '0.52.2';
+import { MONACO_VERSION } from './versions.js';
+export { MONACO_VERSION };
 const DEFAULT_VS = `https://cdn.jsdelivr.net/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
 const EDITOR_FONT = 'Menlo, Monaco, "SF Mono", Consolas, "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace';
 const THEME = 'qos-dark-modern';

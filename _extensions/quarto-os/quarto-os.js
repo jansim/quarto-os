@@ -464,8 +464,33 @@ function mountBrowser(win, opts) {
 
 // == desktop
 const LOGO = '<svg viewBox="0 0 16 16"><path d="M8 1.2c.5 3.4 2.4 5.3 5.8 5.8-3.4.5-5.3 2.4-5.8 5.8-.5-3.4-2.4-5.3-5.8-5.8C5.6 6.5 7.5 4.6 8 1.2z"/><circle cx="13" cy="13" r="1.6"/></svg>';
-const STATUS = '<svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M2.6 5.4a10.5 10.5 0 0 1 14.8 0M5.6 8.4a6.2 6.2 0 0 1 8.8 0"/><circle cx="10" cy="11.6" r="1.5" fill="currentColor" stroke="none"/></svg>' +
-  '<svg viewBox="0 0 26 14"><rect x=".7" y="1.7" width="21.6" height="10.6" rx="3" fill="none" stroke="currentColor" stroke-opacity=".55"/><rect x="2.4" y="3.4" width="15" height="7.2" rx="1.6"/><path d="M23.6 5.2v3.6a2 2 0 0 0 0-3.6z" opacity=".55"/></svg>';
+
+function showAbout(desk) {
+  if (desk.about) { desk.about.showModal(); return; }
+  const dialog = desk.about = h('dialog', 'qos-about');
+  const title = h('h2', '', 'Quarto OS');
+  title.id = 'qos-about-' + (++uid);
+  dialog.setAttribute('aria-labelledby', title.id);
+  const mark = h('div', 'qos-about-logo', LOGO);
+  mark.setAttribute('aria-hidden', 'true');
+  const versions = h('dl', 'qos-about-versions');
+  const row = (name, version) => versions.append(h('dt', '', esc(name)), h('dd', '', esc(version)));
+  row('Quarto OS', QOS.version);
+  const generator = D.querySelector('meta[name="generator"]');
+  if (generator && /^quarto-/i.test(generator.content)) row('Quarto', generator.content.replace(/^quarto-/i, ''));
+  const close = btn('qos-about-close', 'Close');
+  close.addEventListener('click', () => dialog.close());
+  dialog.append(mark, title, h('p', '', 'A desktop for your documents. Real Linux apps, running in your browser.'), versions,
+    h('p', '', '<a href="https://github.com/jansim/quarto-os" target="_blank" rel="noopener">Source &amp; documentation ↗</a>'), close);
+  desk.el.appendChild(dialog);
+  dialog.showModal();
+  // Reading version metadata never boots the VM or loads an editor or terminal.
+  import(baseUrl + 'apps/versions.js').then(v => {
+    row('v86', v.V86_VERSION);
+    row('Monaco Editor', config.cdn && config.cdn.monaco ? 'Custom build' : v.MONACO_VERSION);
+    row('xterm.js', v.XTERM_VERSION);
+  }).catch(() => row('Component versions', 'Unavailable'));
+}
 
 class Desktop {
   constructor(el) {
@@ -483,9 +508,9 @@ class Desktop {
     kids.forEach(k => { if (!k.classList.contains('qos-window')) extra.appendChild(k); });
     if (extra.firstChild) screen.appendChild(extra);
     if (o.menubar == null || yes(o.menubar)) {
-      this.menubar = h('div', 'qos-menubar', '<span class="qos-mb-logo">' + LOGO + '</span><b class="qos-mb-app"></b>' +
-        ['File', 'Edit', 'View', 'Window', 'Help'].map(m => '<span class="qos-mb-menu">' + m + '</span>').join('') +
-        '<span class="qos-mb-right"><span class="qos-mb-status"></span>' + STATUS + '<span class="qos-mb-clock"></span></span>');
+      this.menubar = h('div', 'qos-menubar', '<button type="button" class="qos-mb-logo" aria-label="About Quarto OS" title="About Quarto OS" aria-haspopup="dialog">' + LOGO + '</button><b class="qos-mb-app"></b>' +
+        '<span class="qos-mb-right"><span class="qos-mb-status"></span><span class="qos-mb-clock"></span></span>');
+      this.menubar.querySelector('.qos-mb-logo').addEventListener('click', () => showAbout(this));
       el.appendChild(this.menubar);
     } else el.classList.add('qos-nomenubar');
     el.appendChild(screen);
@@ -762,7 +787,7 @@ function init() {
 }
 
 const QOS = W.QuartoOS = {
-  version: '0.1.0',
+  version: '0.3.1',
   config, baseUrl, apps, windows, desktops,
   lastTerminal: null,
   open, vm, loadScript, loadCSS,
