@@ -2,7 +2,7 @@
 // The unprivileged qos-agent multiplexes filesystem requests and six Linux PTYs
 // over a raw serial console. v86 is BSD-2-Clause licensed and needs no COOP/COEP.
 
-const V86_VERSION = '0.5.472';
+import { V86_VERSION } from '../apps/versions.js';
 const DEFAULT_ASSETS = 'https://jansim.github.io/quarto-os/vm-assets/';
 const HOME = '/home/user';
 const VT_FIRST = 2, VT_LAST = 7; // logical session slots, kept for API compatibility

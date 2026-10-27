@@ -302,19 +302,30 @@ code.qos-run.qos-flash, .qos-run-wrap.qos-flash pre { animation: qos-flash .5s; 
   user-select: none;
   -webkit-user-select: none;
 }
-.qos-mb-logo, .qos-mb-app, .qos-mb-menu { padding: 4px 9px; border-radius: 5px; }
-.qos-mb-logo { display: flex; padding: 3px 9px; }
+.qos-mb-app { padding: 4px 9px; }
+.qos-mb-logo { appearance: none; display: flex; padding: 3px 9px; border: 0; border-radius: 5px; background: none; color: inherit; cursor: pointer; }
 .qos-mb-logo svg { width: 15px; height: 15px; fill: currentColor; }
 .qos-mb-app { font-weight: 700; }
-.qos-mb-logo:hover, .qos-mb-menu:hover, .qos-mb-app:hover { background: rgba(255,255,255,.2); }
+.qos-mb-logo:hover { background: rgba(255,255,255,.2); }
+.qos-mb-logo:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
 .qos-mb-right { display: flex; align-items: center; gap: 13px; margin-left: auto; padding-right: 6px; }
-.qos-mb-right svg { width: auto; height: 13px; fill: currentColor; }
-.qos-mb-right svg + svg { height: 12px; }
 .qos-mb-status { display: none; align-items: center; gap: 6px; font-size: 12px; opacity: .92; }
 .qos-mb-status.qos-on { display: inline-flex; }
 .qos-mb-status.qos-on::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #ffd60a; box-shadow: 0 0 6px #ffd60a; animation: qos-breathe 1.2s infinite; }
-@container (max-width: 620px) { .qos-mb-menu:nth-of-type(n+4) { display: none; } }
-@container (max-width: 460px) { .qos-mb-menu, .qos-mb-right svg { display: none; } }
+
+.qos-about { box-sizing: border-box; width: min(380px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 28px; overflow: auto; border: 1px solid rgba(0,0,0,.16); border-radius: 14px; background: #fff; color: #1d1d1f; box-shadow: 0 18px 60px rgba(0,0,0,.3); font: 14px/1.5 var(--qos-font); text-align: center; text-shadow: none; white-space: normal; }
+.qos-about::backdrop { background: rgba(0,0,0,.3); }
+.qos-about-logo svg { width: 44px; height: 44px; fill: #7d65cf; }
+.qos-about h2 { margin: 8px 0; padding: 0; border: 0; color: inherit; font: 700 24px/1.2 var(--qos-font); }
+.qos-about p { margin: 12px 0; font: inherit; }
+.qos-about-versions { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; margin: 20px 0; font: inherit; text-align: left; }
+.qos-about-versions dt { font-weight: 600; }
+.qos-about-versions dd { margin: 0; text-align: right; }
+.qos-about a { color: #175ac5; text-decoration: underline; }
+.qos-about-close { padding: 6px 24px; border: 1px solid #c4c4c8; border-radius: 6px; background: #f3f3f3; color: inherit; font: inherit; cursor: pointer; }
+.qos-desk-dark .qos-about { background: #242426; color: #e8e8ea; color-scheme: dark; }
+.qos-desk-dark .qos-about a { color: #8bb9ff; }
+.qos-desk-dark .qos-about-close { background: #37373a; border-color: #606064; }
 
 .qos-dock { position: absolute; left: 50%; bottom: 6px; z-index: 2; display: flex; align-items: flex-end; max-width: calc(100% - 16px); padding: 5px 5px 6px; border-radius: 17px; background: var(--qos-glass); -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); box-shadow: inset 0 0 0 .5px var(--qos-glass-edge), 0 0 0 .5px rgba(0,0,0,.14), 0 8px 26px rgba(0,0,0,.22); transform: translateX(-50%); }
 .qos-dock-apps, .qos-dock-min { display: flex; align-items: flex-end; }
