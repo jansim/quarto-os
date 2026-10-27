@@ -58,9 +58,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vm-assets
-          key: vm-assets-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.vm-generation.outputs.week }}-${{ hashFiles('dev/v86/Dockerfile', 'dev/v86/.dockerignore', 'dev/v86/init', 'dev/v86/boot-init', 'dev/v86/*.sh', 'dev/v86/build-boot-state.mjs', 'dev/v86/package*.json', 'dev/v86/tools/**') }}
+          key: vm-assets-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vm-generation.outputs.week }}-${{ hashFiles('dev/v86/Dockerfile', 'dev/v86/.dockerignore', 'dev/v86/init', 'dev/v86/boot-init', 'dev/v86/*.sh', 'dev/v86/build-boot-state.mjs', 'dev/v86/source-links.mjs', 'dev/v86/package*.json', 'dev/v86/tools/**') }}
 
-      - name: Build v86 runtime, guest and corresponding sources
+      - name: Build v86 runtime, guest and source links
         if: steps.vm-assets.outputs.cache-hit != 'true'
         run: bash dev/v86/prepare.sh
 
@@ -87,7 +87,7 @@ jobs:
           node dev/server.mjs . 8203 nocoi > /tmp/quarto-os-server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
-          node --test dev/v86/hash.test.mjs
+          node --test dev/v86/hash.test.mjs dev/v86/source-links.test.mjs
           node dev/vm-test.mjs --port 8203 --suite all
           node dev/v86/lifecycle.mjs --port 8203
           node dev/v86/startup.mjs --port 8203

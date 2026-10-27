@@ -5,11 +5,11 @@ RUN touch /tmp/empty-status && apt-get -o APT::Architecture=i386 -o Dir::State::
 RUN mkdir /guest && for p in /var/cache/apt/archives/*_i386.deb /var/cache/apt/archives/*_all.deb; do test ! -f "$p" || dpkg-deb -x "$p" /guest; done
 RUN for d in /guest/lib/modules/*; do depmod -b /guest "$(basename "$d")"; done
 
-# The signed package set is common to both profiles. Cache its corresponding
-# sources independently from init/trim changes so local iteration stays quick.
+# Generate source download links from the signed package set, including static
+# dependencies. Cache the small inventory separately from guest packing.
 FROM packages AS sources
 COPY collect-sources.sh /collect-sources.sh
-RUN sh /collect-sources.sh && cp /sources/packages.txt /source-packages.txt
+RUN sh /collect-sources.sh
 
 FROM packages AS guest
 COPY init /guest/init
@@ -23,5 +23,5 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
     sh /pack-guest.sh
 
 FROM guest AS assets
-COPY --from=sources /guest-sources.tar.gz /guest-sources.tar.gz
-COPY --from=sources /source-packages.txt /source-packages.txt
+COPY --from=sources /sources/packages.txt /source-packages.txt
+COPY --from=sources /sources/uris.txt /source-uris.txt

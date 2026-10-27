@@ -54,6 +54,11 @@ try {
   await fs.writeFile(path.join(root, file), compressed);
   manifest.bootState = {file, memory, sha256, bytes:compressed.length};
   await fs.writeFile(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  // Keep local rebuilds as small as a fresh CI publication.
+  for (const name of await fs.readdir(root)) {
+    if (name !== file && /^boot-state-[a-f0-9]{16}\.bin\.gz$/.test(name))
+      await fs.unlink(path.join(root, name));
+  }
   console.log(JSON.stringify({bootMs:Math.round(performance.now() - start), snapshotBytes:compressed.length, memory}, null, 2));
 } finally {
   clearTimeout(timer);
