@@ -13,18 +13,14 @@ RUN sh /collect-sources.sh && cp /sources/packages.txt /source-packages.txt
 
 FROM packages AS guest
 COPY init /guest/init
-RUN chmod +x /guest/init && cp /guest/boot/vmlinuz-* /bzimage && \
-    ver=$(basename /guest/lib/modules/*) && \
-    for mod in virtio_pci 9p 9pnet_virtio; do modprobe -d /guest -S "$ver" --show-depends "$mod"; done | awk '$1 == "insmod" { print $2 }' | sort -u > /keep-modules
-RUN find /guest/lib/modules -type f -name '*.ko*' | while read -r file; do grep -qxF "$file" /keep-modules || rm "$file"; done
+COPY boot-init /boot-init
 COPY slim-guest.sh /slim-guest.sh
+COPY pack-guest.sh /pack-guest.sh
+COPY tools/ /tools/
 ARG GUEST_PROFILE=slim
-RUN case "$GUEST_PROFILE" in slim) sh /slim-guest.sh ;; full) ;; *) echo "Unknown GUEST_PROFILE: $GUEST_PROFILE" >&2; exit 1 ;; esac
-RUN rm -rf /guest/boot /guest/usr/share/man /guest/usr/share/locale /guest/usr/lib/python3.11/test && \
-    for d in /guest/lib/modules/*; do depmod -b /guest "$(basename "$d")"; done && \
-    cd /guest && find . -print0 | cpio --null -o --format=newc > /guest.cpio && gzip /guest.cpio
-RUN if [ "$GUEST_PROFILE" = slim ] && [ "$(stat -c %s /guest.cpio.gz)" -gt 52428800 ]; then \
-      echo 'Slim guest exceeds its 50 MiB compressed size budget' >&2; exit 1; fi
+RUN apt-get update -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends python3 python3-zstandard && \
+    sh /pack-guest.sh
 
 FROM guest AS assets
 COPY --from=sources /guest-sources.tar.gz /guest-sources.tar.gz

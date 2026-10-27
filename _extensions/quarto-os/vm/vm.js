@@ -205,6 +205,7 @@ class VM {
     this.config = {
       assetBase: String(pick('assetBase', 'asset-base', DEFAULT_ASSETS)),
       memory: Number(pick('memory', 'memory', 512)),
+      bootSnapshot: bool(pick('bootSnapshot', 'boot-snapshot', true)),
       bootTimeout: Number(pick('bootTimeout', 'boot-timeout', 120000)),
       persist: bool(pick('persist', 'persist', false)),
       cacheId: String(pick('cacheId', 'cache-id', 'quarto-os')),
@@ -312,8 +313,8 @@ class VM {
   async _startMachine() {
     this._setStatus('Loading v86…');
     const asset = name => new URL(name, this._assets).href;
-    const get = async (url, type) => {
-      const response = await fetch(url, {cache: 'no-cache'});
+    const get = async (url, type, cache = 'no-cache') => {
+      const response = await fetch(url, {cache});
       if (!response.ok) throw new Error(`Could not load VM asset ${url} (HTTP ${response.status})`);
       return response[type]();
     };
@@ -323,21 +324,37 @@ class VM {
     if (manifest.runtime !== V86_VERSION || !manifest.image) throw new Error('Incompatible v86 asset manifest; rebuild the VM assets');
     const agentHash = await sha256Hex(agent);
     this._signature = `${V86_VERSION}/${manifest.image}/${agentHash}/${this.config.memory}/protocol-3`;
-    let snapshot = null;
+    let snapshot = null, userSnapshot = false;
     if (this.config.persist) {
       this._db = await openStore(this.config.cacheId);
       const saved = await storeRequest(this._db, 'readonly', store => store.get('machine'));
       if (saved?.signature === this._signature) {
         this._setStatus('Restoring Linux…');
         snapshot = await new Response(saved.state.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+        userSnapshot = true;
       }
     }
+    const rooted = !!manifest.filesystem;
+    if (rooted && (!manifest.filesystem.metadata || !manifest.filesystem.base))
+      throw new Error('Incomplete on-demand filesystem manifest; rebuild the VM assets');
+    if (!snapshot && this.config.bootSnapshot && manifest.bootState) {
+      if (manifest.bootState.memory !== this.config.memory)
+        throw new Error('Boot snapshot memory does not match vm.memory; use matching memory or set vm.boot-snapshot: false');
+      this._setStatus('Loading clean boot snapshot…');
+      const bytes = await get(asset(manifest.bootState.file), 'arrayBuffer', 'force-cache');
+      if (await sha256Hex(bytes) !== manifest.bootState.sha256) throw new Error('Boot snapshot checksum mismatch');
+      snapshot = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    }
+    this.bootMode = userSnapshot ? 'persisted' : snapshot ? 'snapshot' : 'kernel';
     await loadRuntime(asset('libv86.js'));
     if (this._stopped) return;
     const emulator = this._emulator = new globalThis.V86({
       wasm_path: asset('v86.wasm'), bios: {url: asset('seabios.bin')},
       vga_bios: {url: asset('vgabios.bin')}, memory_size: this.config.memory * 1024 * 1024,
-      filesystem: {}, autostart: false, disable_keyboard: true, disable_mouse: true, disable_speaker: true,
+      filesystem: rooted ? {
+        baseurl: asset(manifest.filesystem.base),
+        ...(!snapshot ? {basefs: asset(manifest.filesystem.metadata)} : {}),
+      } : {}, autostart: false, disable_keyboard: true, disable_mouse: true, disable_speaker: true,
       ...(snapshot ? {initial_state: {buffer: snapshot}} : {
         bzimage: {url: asset('bzimage')}, initrd: {url: asset('initrd.gz')},
         cmdline: 'console=ttyS0 tsc=reliable mitigations=off random.trust_cpu=on init=/init',
@@ -345,9 +362,18 @@ class VM {
     });
     this._dataDev = {writeFile: async (name, bytes) => {
       if (this._checkpointing) await this._capturing;
-      await emulator.create_file(name.replace(/^\//, ''), bytes);
+      await emulator.create_file((rooted ? 'data/' : '') + name.replace(/^\//, ''), bytes);
     }};
     this._sendText = text => emulator.serial0_send(text);
+    this._fsReads = 0;
+    emulator.add_listener('9p-read-start', () => this._fsReads++);
+    emulator.add_listener('9p-read-end', () => this._fsReads--);
+    const bootstrap = async () => {
+      await emulator.create_file((rooted ? 'data/' : '') + 'qos-agent', new Uint8Array(agent));
+      // A published clean snapshot may have been built long before this visit.
+      // Synchronize the guest clock while the bootstrap shell is still root.
+      this._sendText(`/bin/busybox date -u -s @${Math.floor(Date.now() / 1000)} >/dev/null && cp /mnt/host/qos-agent /tmp/qos-agent && chmod 755 /tmp/qos-agent && /tmp/qos-agent; printf "\\nQOS_AGENT_STOPPED\\n"\n`);
+    };
     let bootText = '', bootstrapped = !!snapshot;
     this._bootLog = '';
     let serial = [], scheduled = false;
@@ -375,9 +401,7 @@ class VM {
       if (!bootstrapped) {
         if (bootText.includes('QOS_READY#')) {
           bootstrapped = true;
-          emulator.create_file('qos-agent', new Uint8Array(agent)).then(() => {
-            this._sendText('cp /mnt/host/qos-agent /tmp/qos-agent && chmod 755 /tmp/qos-agent && /tmp/qos-agent; printf \"\\nQOS_AGENT_STOPPED\\n\"\n');
-          }).catch(error => { for (const waiter of this._upWaiters.splice(0)) waiter.reject(error); });
+          bootstrap().catch(error => { for (const waiter of this._upWaiters.splice(0)) waiter.reject(error); });
         }
       }
     });
@@ -387,7 +411,8 @@ class VM {
     if (this._stopped) return;
     this._setStatus(snapshot ? 'Restoring Linux…' : 'Booting Linux…');
     await emulator.run();
-    if (snapshot) this._sendText('\x02B 2147483647\n');
+    if (userSnapshot) this._sendText('\x02B 2147483647\n');
+    else if (snapshot) await bootstrap();
     await up;
     await this._ensureDefaults();
     await this._runSetup();
@@ -419,7 +444,7 @@ class VM {
   async _save() {
     clearTimeout(this._saveTimer);
     const deadline = performance.now() + 10000;
-    while (this._pending.size || this._q.length || !this._credit) {
+    while (this._pending.size || this._q.length || !this._credit || this._fsReads) {
       if (performance.now() > deadline) throw new Error('Cannot checkpoint while VM requests are active; wait for them to finish');
       await sleep(25);
     }
@@ -429,6 +454,10 @@ class VM {
     let state;
     try {
       await this._emulator.stop();
+      while (this._fsReads) {
+        if (performance.now() > deadline) throw new Error('Filesystem reads did not finish before checkpoint');
+        await sleep(10);
+      }
       state = await this._emulator.save_state();
     } finally {
       await this._emulator.run();

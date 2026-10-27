@@ -61,6 +61,7 @@ jobs:
           node --test dev/v86/hash.test.mjs
           node dev/vm-test.mjs --port 8203 --suite all
           node dev/v86/lifecycle.mjs --port 8203
+          node dev/v86/startup.mjs --port 8203
           node dev/v86/http-origin.mjs --port 8203
           node dev/apps-e2e.mjs --port 8203 --real
 
