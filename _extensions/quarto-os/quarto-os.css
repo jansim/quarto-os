@@ -350,7 +350,7 @@ code.qos-run.qos-flash, .qos-run-wrap.qos-flash pre { animation: qos-flash .5s; 
 
 /* == reveal.js: undo slide typography / image rules inside the chrome */
 .reveal .qos-window.qos-ready, .reveal .qos-desktop.qos-ready { line-height: 1.35; letter-spacing: normal; word-spacing: normal; text-transform: none; }
-.reveal .qos-window.qos-ready:not(.qos-cell) { margin-block: 16px; }
+.reveal .qos-window.qos-ready:not(.qos-cell):not(.qos-floating) { margin-block: 16px; }
 .reveal .qos-desktop.qos-ready { margin: 12px 0; }
 .reveal .qos-window.qos-floating { margin: 0; }
 .reveal .qos-body.qos-prose, .reveal .qos-closedbar { font-size: var(--qos-slide-font); }

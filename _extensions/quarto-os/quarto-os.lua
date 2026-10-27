@@ -11,7 +11,7 @@
   Only active for HTML formats that run JavaScript (html, revealjs, …).
 ]]
 
-local VERSION = "0.3.0"
+local VERSION = "0.3.1"
 local VM_APPS = { terminal = true, vscode = true, explorer = true }
 local DEFAULT_DOCK = "terminal,vscode,explorer"
 
