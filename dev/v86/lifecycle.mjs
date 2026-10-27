@@ -27,7 +27,7 @@ try {
 
   await page.evaluate(async () => {
     await vm.writeFile('~/checkpoint.txt','baseline');
-    await vm._emulator.create_file('checkpoint-share.txt',new TextEncoder().encode('shared baseline'));
+    await vm._emulator.create_file('data/checkpoint-share.txt',new TextEncoder().encode('shared baseline'));
     await vm.openSession({cmd:'sleep 600'});
     await vm.ping();
     const inFlight = vm.exec('sleep 1; echo completed > ~/in-flight.txt');
@@ -49,10 +49,11 @@ try {
   });
   assert(failed);
   await page.reload(); await ready();
+  assert.equal(await page.evaluate(() => vm.bootMode), 'persisted');
   const restored = await page.evaluate(async () => ({
     file:await vm.readText('~/checkpoint.txt'),
     inFlight:await vm.readText('~/in-flight.txt'),
-    shared:new TextDecoder().decode(await vm._emulator.read_file('checkpoint-share.txt')),
+    shared:new TextDecoder().decode(await vm._emulator.read_file('data/checkpoint-share.txt')),
     processes:(await vm.exec('for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = sleep ] && echo "$p"; done; true')).output.trim(),
   }));
   assert.equal(restored.file,'baseline'); assert.equal(restored.inFlight,'completed\n'); assert.equal(restored.shared,'shared baseline'); assert.equal(restored.processes,'');
@@ -61,6 +62,7 @@ try {
   await Promise.all([page.waitForNavigation(),page.evaluate(() => vm.reset())]);
   await ready();
   assert.equal(await page.evaluate(() => vm.stat('~/checkpoint.txt')),null);
-  assert.equal(await page.evaluate(() => vm._emulator.read_file('checkpoint-share.txt').then(()=>true,()=>false)),false);
+  assert.equal(await page.evaluate(() => vm._emulator.read_file('data/checkpoint-share.txt').then(()=>true,()=>false)),false);
+  assert.equal(await page.evaluate(() => vm.bootMode), 'snapshot');
   console.log('PASS reset clears the persisted machine and restores pristine files');
 } finally {await browser.close();}

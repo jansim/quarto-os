@@ -1,6 +1,6 @@
 #!/bin/sh
-# Run in the builder: retain exact source versions, including statically linked
-# components and Debian's unsigned kernel source behind the signed image package.
+# Record exact source versions and download URLs without downloading archives.
+# Include static components and the unsigned kernel behind the signed package.
 set -eu
 mkdir -p /sources
 for package in /var/cache/apt/archives/*_i386.deb /var/cache/apt/archives/*_all.deb; do
@@ -20,6 +20,10 @@ done | sort -u > /sources/packages.txt
 sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
 apt-get update -o APT::Update::Error-Mode=any
 cd /sources
-while read -r source; do apt-get source --download-only --only-source "$source"; done < packages.txt
-# Source packages contain Debian build rules, upstream sources and license texts.
-tar -czf /guest-sources.tar.gz -C / sources
+while read -r source; do
+  printf '# %s\n' "$source"
+  # --print-uris lists the .dsc and all source archives with sizes/checksums.
+  # It does not fetch those files; only the signed APT indexes are downloaded.
+  apt-get source --print-uris --download-only --only-source "$source" > /tmp/apt-source-uris.txt
+  sed -n "/^'/p" /tmp/apt-source-uris.txt
+done < packages.txt > uris.txt

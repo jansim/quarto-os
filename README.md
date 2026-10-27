@@ -84,7 +84,8 @@ quarto-os:
   theme: light            # default chrome theme (light|dark)
   vm:
     asset-base: https://jansim.github.io/quarto-os/vm-assets/
-    memory: 1024          # guest RAM in MiB
+    memory: 512           # guest RAM in MiB
+    boot-snapshot: true  # restore the prebuilt clean boot state
     boot-timeout: 120000  # milliseconds
     persist: false        # keep VM disk changes across reloads (IndexedDB)
     cache-id: quarto-os   # IndexedDB name for the overlay
@@ -104,7 +105,8 @@ The full reference is on the [docs site](https://jansim.github.io/quarto-os/#ref
 - The apps share **one VM per page** (`vm/vm.js`). v86 boots Debian i386 in
   WebAssembly. The small C agent (`agent/qos-agent.c`) serves file operations,
   executes commands as uid 1000, and multiplexes six independent Linux PTYs over
-  one serial channel. Each terminal has its own size and job control.
+  one serial channel. A prebuilt boot snapshot skips kernel startup, and root
+  files load on demand from the static asset host. Each terminal has its own size and job control.
 - The VM works on ordinary static hosts, including GitHub Pages. It needs no
   cross-origin isolation headers or first-visit service-worker reload.
 - Changes are temporary by default. `persist: true` saves compressed machine
@@ -112,8 +114,9 @@ The full reference is on the [docs site](https://jansim.github.io/quarto-os/#ref
   before navigating away. A restored page closes stale terminal processes and
   reruns setup only if its script changed. Old CheerpX overlays are not imported.
 
-Limitations: six terminals per page, no guest network, approximately 1 GiB of guest
-RAM, and a substantial initial guest download. Chromium and Firefox are recommended.
+Limitations: six terminals per page, no guest network, 512 MiB of guest
+RAM, plus temporary snapshot memory. Uncached root files require access to the
+static asset host after boot. Chromium and Firefox are recommended.
 Snapshots are versioned against the runtime, guest image and agent; rebuilding any
 of them starts a fresh cache. See the [docs](https://jansim.github.io/quarto-os/#limitations).
 
@@ -132,7 +135,10 @@ dev/                     test harnesses and a static dev server
   uses `zig` from `PATH`; with the PyPI package use `ZIG="python -m ziglang" agent/build.sh`.
 - **Render the docs site**: `quarto render` (outputs to `_site/`).
 - **Build the open VM assets** (Docker + Node + curl): `bash dev/v86/prepare.sh`.
-  This writes ignored `vm-assets/` with the runtime, guest and corresponding sources.
+  The slim guest loads files on demand; the clean snapshot path downloads about
+  25 MiB of VM assets before readiness in the local measurements. `V86_GUEST_PROFILE=full bash dev/v86/prepare.sh` retains
+  optional Perl/Git helpers; configure `vm.memory: 1024` for that larger guest.
+  This writes ignored `vm-assets/` with the runtime, guest and exact upstream source links.
   See [the build guide](dev/v86/README.md) for proxy support and tests.
 - **Serve it locally**: `node dev/server.mjs _site 8000 nocoi`.
 
@@ -152,7 +158,7 @@ set **Settings → Pages → Build and deployment → Source** to **GitHub Actio
   licensed dependencies. Commercial use does not require a proprietary VM license.
 - SeaBIOS firmware is LGPL-3.0. The Debian guest retains each package's license,
   including Linux, Git, Bash and BusyBox copyleft licenses. The build publishes
-  matching source packages, firmware sources, notices and build instructions at
+  links to exact source packages and firmware sources, plus notices and build instructions at
   [VM sources and licenses](https://jansim.github.io/quarto-os/vm-assets/).
-- xterm.js and Monaco Editor are MIT licensed. The demo images and video were
+- xterm.js, Monaco Editor and the Noble Hashes SHA-256 fallback are MIT licensed. The demo images and video were
   generated for this project.

@@ -2,3 +2,8 @@
 !Dockerfile
 !init
 !collect-sources.sh
+!slim-guest.sh
+!boot-init
+!pack-guest.sh
+!tools/
+!tools/**

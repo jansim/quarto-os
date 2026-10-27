@@ -11,9 +11,15 @@ const arg = (name, fallback) => {
   const index = process.argv.indexOf(`--${name}`);
   return index < 0 ? fallback : process.argv[index + 1];
 };
+const memory = Number(arg('memory', '512'));
+assert(Number.isInteger(memory) && memory >= 256 && memory <= 2048, 'Invalid guest RAM size');
 const assets = path.resolve(arg('assets', 'dev/v86/out'));
 const playwright = arg('playwright', 'playwright');
 const { chromium } = await import(playwright.startsWith('/') ? pathToFileURL(playwright).href : playwright);
+const manifest = JSON.parse(await fs.readFile(path.join(assets, 'manifest.json'), 'utf8'));
+const rooted = !!manifest.filesystem;
+const filesystem = rooted ? {basefs: manifest.filesystem.metadata, baseurl: manifest.filesystem.base} : {};
+const prefix = rooted ? 'data/' : '';
 const html = `<!doctype html><meta charset="utf-8"><title>v86 feasibility test</title>
 <script src="node_modules/v86/build/libv86.js"></script><script>
 window.output = '';
@@ -21,7 +27,7 @@ window.emulator = new V86({
   wasm_path: 'node_modules/v86/build/v86.wasm',
   bios: {url: 'seabios.bin'}, vga_bios: {url: 'vgabios.bin'},
   bzimage: {url: 'bzimage'}, initrd: {url: 'initrd.gz'},
-  memory_size: 1024 * 1024 * 1024, filesystem: {}, autostart: true,
+  memory_size: ${memory} * 1024 * 1024, filesystem: ${JSON.stringify(filesystem)}, autostart: true,
   cmdline: 'console=ttyS0 tsc=reliable mitigations=off random.trust_cpu=on init=/init'
 });
 emulator.add_listener('serial0-output-byte', b => { window.output += String.fromCharCode(b); });
@@ -80,11 +86,12 @@ try {
   assert(versions.includes('GNU bash,') && versions.includes('git version ') && versions.includes('Python 3.'));
   console.log(versions);
   const payload = [...new TextEncoder().encode('host → guest\n')];
-  await page.evaluate(bytes => emulator.create_file('host.txt', new Uint8Array(bytes)), payload);
+  await page.evaluate(bytes => emulator.create_file(bytes[0], new Uint8Array(bytes[1])), [prefix + 'host.txt', payload]);
   const guest = await run('cat /mnt/host/host.txt');
   assert(guest.includes('host → guest'));
-  await run("printf 'guest-to-host' > /mnt/host/guest.txt");
-  assert.equal(await page.evaluate(async () => new TextDecoder().decode(await emulator.read_file('guest.txt'))), 'guest-to-host');
+  // Flush Linux writeback before inspecting the backing 9p store directly.
+  await run("printf 'guest-to-host' > /mnt/host/guest.txt; sync");
+  assert.equal(await page.evaluate(async name => new TextDecoder().decode(await emulator.read_file(name)), prefix + 'guest.txt'), 'guest-to-host');
   console.log('PASS host/guest file exchange through virtio 9p');
 
   await run("python3 -c 'import os; m,s=os.openpty(); os.write(s,b\"pty-ok\"); assert b\"pty-ok\" in os.read(m,100); os.close(m); os.close(s)'");
@@ -92,6 +99,12 @@ try {
   await run('mkdir -p /root/repo && cd /root/repo && git init -q && git config user.name Student && git config user.email student@example.com && echo hello > README.md && git add README.md && git commit -qm first');
   assert((await run('cd /root/repo && git log -1 --format=%s')).includes('first'));
   console.log('PASS Git init, stage, commit, and log inside the guest');
+
+  if (process.argv.includes('--full-profile')) {
+    await run(String.raw`cd /root/repo && FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --env-filter 'export GIT_AUTHOR_NAME=FullProfile' -- --all`);
+    assert((await run('cd /root/repo && git log -1 --format=%an')).includes('FullProfile'));
+    console.log('PASS full profile retains Perl-based git filter-branch');
+  }
 
   await run('echo persistent > /root/spike.txt');
   await page.evaluate(async () => {

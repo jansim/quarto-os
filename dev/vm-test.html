@@ -447,6 +447,25 @@ async function mainSuite() {
     return r.output.trim();
   });
 
+  await test('offline Git helpers work in the slim guest', async () => {
+    const result = await vm.exec([
+      'mkdir -p ~/slim-git && cd ~/slim-git',
+      String.raw`printf 'fruit:apple\n' | grep fruit | sed 's/fruit://' | awk '{print $1}' | grep -qx apple`,
+      'git init -q source && cd source',
+      'printf "first\\n" > notes.txt && git add notes.txt && git commit -qm first',
+      'git checkout -qb lesson',
+      'printf "second\\n" >> notes.txt && git stash push -qm saved',
+      'git stash pop -q && git add notes.txt && git commit -qm second',
+      'cd .. && git clone -q --local source clone && cd clone',
+      'test "$(git branch --show-current)" = lesson',
+      'test "$(git log -1 --format=%s)" = second',
+      'git fsck --no-progress && git archive HEAD > ../lesson.tar',
+      String.raw`python3 -c 'import tarfile; assert tarfile.open("../lesson.tar").extractfile("notes.txt").read() == b"first\nsecond\n"'`,
+    ].join(' && '));
+    assert(result.code === 0, result.output);
+    return 'branch, stash, local clone, fsck and archive + Python tarfile';
+  });
+
   await test('watch fires after a terminal touch', async () => {
     await vm.mkdir('~/wdir');
     const seen = [];
@@ -605,7 +624,7 @@ try {
   }
   else if (suite === 'boot') {
     await test('boot only (window.vm for manual testing)', () => boot({
-      persist: params.get('persist') === '1', cacheId: params.get('cache') || undefined, disk: params.get('disk') || undefined,
+      persist: params.get('persist') === '1', cacheId: params.get('cache') || undefined, disk: params.get('disk') || undefined, bootSnapshot: params.get('boot-snapshot') !== '0',
     }));
   }
   else await persistSuite(suite);

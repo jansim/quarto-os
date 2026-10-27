@@ -1,17 +1,16 @@
 #!/bin/busybox sh
 set -e
-/bin/busybox mount -t devtmpfs devtmpfs /dev
-/bin/busybox mkdir -p /proc /sys /dev/pts /tmp /root /home/user /mnt/host
+if [ ! -c /dev/console ]; then /bin/busybox mount -t devtmpfs devtmpfs /dev; fi
+/bin/busybox mkdir -p /proc /sys /dev/pts /tmp /root /home/user /data
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox mount -t devpts devpts /dev/pts
-/sbin/modprobe virtio_pci
-/sbin/modprobe 9p
-/sbin/modprobe 9pnet_virtio
-/bin/busybox mount -t 9p -o trans=virtio,version=9p2000.L host9p /mnt/host
-/bin/busybox ln -s /mnt/host /data
+/bin/busybox chmod 755 /
+/bin/busybox chmod 777 /data
 /bin/busybox hostname quarto-os
 /bin/busybox ln -sf bash /bin/sh
+# Supply common text utilities from the existing static BusyBox binary.
+for tool in grep sed awk; do /bin/busybox ln -sf /bin/busybox "/bin/$tool"; done
 printf 'root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000:user:/home/user:/bin/bash\n' > /etc/passwd
 printf 'root:x:0:\nuser:x:1000:\n' > /etc/group
 printf 'PS1="\\u@\\h:\\w\\$ "\n' > /home/user/.bashrc

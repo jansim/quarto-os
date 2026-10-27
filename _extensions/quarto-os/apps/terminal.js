@@ -180,11 +180,7 @@ export async function createTerminal(el, opts = {}, os = window.QuartoOS) {
     const msg = errMsg(e);
     term.write(`\r\n\x1b[1;31m✗ ${title}\x1b[0m\r\n`);
     for (const line of msg.split(/\r?\n/)) term.write(`  ${line}\r\n`);
-    if (typeof crossOriginIsolated !== 'undefined' && !crossOriginIsolated) {
-      term.write(`\r\n${dim('  This page is not cross-origin isolated (COOP/COEP headers are missing),')}\r\n`);
-      term.write(`${dim('  which the in-browser Linux VM requires. Serve the site with those headers')}\r\n`);
-      term.write(`${dim('  or enable the coi-serviceworker (quarto-os: coi: true) and reload.')}\r\n`);
-    }
+
   }
 
   // ---------- lifecycle
