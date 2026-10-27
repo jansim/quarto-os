@@ -135,10 +135,10 @@ dev/                     test harnesses and a static dev server
   uses `zig` from `PATH`; with the PyPI package use `ZIG="python -m ziglang" agent/build.sh`.
 - **Render the docs site**: `quarto render` (outputs to `_site/`).
 - **Build the open VM assets** (Docker + Node + curl): `bash dev/v86/prepare.sh`.
-  The default slim Debian guest is about 47 MiB compressed (55 MiB including the
-  kernel and emulator). `V86_GUEST_PROFILE=full bash dev/v86/prepare.sh` retains
+  The slim guest loads files on demand; the clean snapshot path downloads about
+  25 MiB of VM assets before readiness in the local measurements. `V86_GUEST_PROFILE=full bash dev/v86/prepare.sh` retains
   optional Perl/Git helpers; configure `vm.memory: 1024` for that larger guest.
-  This writes ignored `vm-assets/` with the runtime, guest and corresponding sources.
+  This writes ignored `vm-assets/` with the runtime, guest and exact upstream source links.
   See [the build guide](dev/v86/README.md) for proxy support and tests.
 - **Serve it locally**: `node dev/server.mjs _site 8000 nocoi`.
 
@@ -158,7 +158,7 @@ set **Settings → Pages → Build and deployment → Source** to **GitHub Actio
   licensed dependencies. Commercial use does not require a proprietary VM license.
 - SeaBIOS firmware is LGPL-3.0. The Debian guest retains each package's license,
   including Linux, Git, Bash and BusyBox copyleft licenses. The build publishes
-  matching source packages, firmware sources, notices and build instructions at
+  links to exact source packages and firmware sources, plus notices and build instructions at
   [VM sources and licenses](https://jansim.github.io/quarto-os/vm-assets/).
 - xterm.js, Monaco Editor and the Noble Hashes SHA-256 fallback are MIT licensed. The demo images and video were
   generated for this project.

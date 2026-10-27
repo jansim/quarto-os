@@ -20,8 +20,9 @@ The script uses `install-tools.sh` and the committed npm lockfile to install
 pinned `v86@0.5.472` and Playwright in ignored
 `dev/v86/out/`, builds a Debian guest and copies only publication assets into
 ignored `vm-assets/`. It uses the Debian base manifest pinned in `Dockerfile` and
-signed APT repositories. Source collection is cached in a separate build stage,
-so changing profiles or the trimming script does not re-download the sources. The guest package versions follow bookworm; builds are
+signed APT repositories. A separate build stage records source download links
+from the signed APT indexes without downloading source archives. The guest
+package versions follow bookworm; builds are
 not yet bit-for-bit reproducible against a frozen Debian snapshot.
 
 `Dockerfile` assembles i386 packages using an amd64 builder without executing
@@ -46,10 +47,14 @@ The static publication directory contains:
   content-addressed `rootfs/` files;
 - a gzip-compressed clean boot snapshot, captured before agent or lesson setup;
 - a manifest hashing the kernel and guest, used to invalidate incompatible caches;
-- exact Debian source packages, including Built-Using/static components, plus
-  v86/firmware sources, license texts, source inventory and build instructions.
+- exact Debian source download links, including Built-Using/static components,
+  v86/firmware upstream links, license texts, a source inventory and build instructions.
 
-The source archive is substantial (approximately 462 MiB in the tested build).
+The build does not mirror Debian, v86 or firmware source archives. The source
+page links to Debian’s exact .dsc and companion archives with APT-provided sizes
+and checksums, plus per-version Debian Snapshot pages for archived sources.
+Local guest modifications and build scripts are still published with the assets.
+This removes the previous approximately 462 MiB Debian source bundle from Pages.
 The default slim guest uses 512 MiB of guest memory. Previously its entire
 47.1 MiB compressed initramfs (116 MiB expanded) downloaded before Linux booted,
 with approximately 55 MiB of startup assets including the kernel and emulator.
@@ -81,7 +86,8 @@ Use `vm.memory: 1024` with that guest; an explicit value is needed because the
 runtime defaults to 512 MiB for the slim image. The full profile bypasses the
 trimming script and slim size budget. Both profiles publish the same complete
 source inventory, including notices for the original signed packages. These
-source archives are downloaded only on request, never during VM startup.
+source archives remain on their upstream hosts and are downloaded only if a
+visitor follows their links, never during the build or VM startup.
 
 ## Startup and on-demand files
 
@@ -208,14 +214,14 @@ unit tests compare both paths against standard vectors and Node's SHA-256.
 ## CI caching
 
 The Pages workflow caches the complete `vm-assets/` directory, including the
-matching guest sources, filesystem metadata and clean boot snapshot. An exact
+source download links, filesystem metadata and clean boot snapshot. An exact
 cache hit skips Docker and snapshot generation; browser tests and site rendering
 still run, and the Linux agent is rebuilt from the current source every time.
 The cache key includes guest/build scripts, Docker inputs, the pinned tool
 lockfile, runtime filesystem tools, runner OS/architecture and the UTC ISO week.
 There are no partial asset restores. The first build in a new week rebuilds the
 guest from the rolling Debian repositories. For an earlier refresh, delete the
-matching `vm-assets-v1-...` cache under the repository's Actions caches.
+matching `vm-assets-v2-...` cache under the repository's Actions caches.
 
 npm and pip downloads are cached by their committed dependency files. The
 Playwright browser cache is keyed by the npm lockfile and runner OS/architecture;
@@ -226,8 +232,8 @@ packages needed by the browser tests, without Docker or source downloads.
 
 GitHub's cache scope rules apply: PRs can read eligible default-branch caches,
 while their saved caches remain scoped to their PR merge ref. A cold cache still
-runs the complete build. The asset cache is roughly 540 MiB (mostly corresponding
-sources); GitHub may evict it under its cache quota. Actual warm-run savings need
+runs the complete build. The asset cache contains runtime/guest files and small source-link metadata,
+rather than bundled source archives; GitHub may evict it under its cache quota. Actual warm-run savings need
 to be measured in Actions. Tests and rendering remain part of every warm run.
 
 PR checks have their own concurrency group and superseded PR runs are cancelled.

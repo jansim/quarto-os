@@ -40,13 +40,15 @@ docker cp "$guest_container:/guest.cpio.gz" "$out/initrd.gz"
 docker cp "$guest_container:/fs.json" "$out/fs.json"
 mkdir -p "$out/rootfs"
 docker cp "$guest_container:/rootfs/." "$out/rootfs/"
-docker cp "$guest_container:/guest-sources.tar.gz" "$out/guest-sources.tar.gz"
+docker cp "$guest_container:/source-uris.txt" "$out/source-uris.txt"
 docker cp "$guest_container:/source-packages.txt" "$out/source-packages.txt"
 sha256sum "$out/bzimage" "$out/initrd.gz" "$out/seabios.bin" "$out/vgabios.bin"
 # Copy only redistributable runtime assets into the static-site resource tree.
 site_assets="$here/../../vm-assets"
 mkdir -p "$site_assets"
-for file in bzimage initrd.gz fs.json seabios.bin vgabios.bin COPYING.LESSER fetch-and-build-seabios.sh guest-sources.tar.gz source-packages.txt; do
+# Remove only obsolete generated source bundles when reusing a local output tree.
+rm -f "$site_assets/guest-sources.tar.gz" "$site_assets/v86-source.tar.gz" "$site_assets/seabios-source.tar.gz"
+for file in bzimage initrd.gz fs.json seabios.bin vgabios.bin COPYING.LESSER fetch-and-build-seabios.sh source-packages.txt source-uris.txt; do
   cp "$out/$file" "$site_assets/$file"
 done
 mkdir -p "$site_assets/rootfs"
@@ -64,23 +66,22 @@ const image = createHash('sha256').update(fs.readFileSync(path.join(dir,'bzimage
 fs.writeFileSync(path.join(dir,'manifest.json'), JSON.stringify({runtime:'0.5.472', image, filesystem:{metadata:'fs.json',base:'rootfs/'}}, null, 2)+'\n');
 JS
 
-curl -fsSL "https://codeload.github.com/copy/v86/tar.gz/$revision" -o "$site_assets/v86-source.tar.gz"
-curl -fsSL https://codeload.github.com/coreboot/seabios/tar.gz/refs/tags/rel-1.16.2 -o "$site_assets/seabios-source.tar.gz"
+node "$here/source-links.mjs" "$site_assets"
 curl -fsSL https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.2/COPYING -o "$site_assets/COPYING"
-cp "$here/Dockerfile" "$here/init" "$here/collect-sources.sh" "$here/slim-guest.sh" "$here/boot-init" "$here/pack-guest.sh" "$here/build-boot-state.mjs" "$site_assets/"
+cp "$here/Dockerfile" "$here/init" "$here/collect-sources.sh" "$here/slim-guest.sh" "$here/boot-init" "$here/pack-guest.sh" "$here/build-boot-state.mjs" "$here/source-links.mjs" "$site_assets/"
 mkdir -p "$site_assets/tools"
 cp "$here/tools/"* "$site_assets/tools/"
-cat > "$site_assets/index.html" <<'HTML'
+cat > "$site_assets/index.html" <<HTML
 <!doctype html><meta charset="utf-8"><title>Quarto OS VM sources and licenses</title>
 <h1>Quarto OS VM sources and licenses</h1>
 <p>The emulator is v86 (BSD-2-Clause), with separately licensed dependencies.
 SeaBIOS is LGPL-3.0. The Linux guest contains software under its individual licenses;
 package copyright notices are retained in the guest under /usr/share/doc.</p>
 <ul>
-<li><a href="LICENSE.v86">v86 license</a>; <a href="v86-source.tar.gz">complete pinned v86 sources and dependency notices</a></li>
+<li><a href="LICENSE.v86">v86 license</a>; <a href="https://github.com/copy/v86/tree/$revision">pinned v86 sources and dependency notices</a> (<a href="https://codeload.github.com/copy/v86/tar.gz/$revision">source archive</a>)</li>
 <li><a href="COPYING.LESSER">LGPL-3.0</a> and <a href="COPYING">GPL-3.0</a>;
-<a href="seabios-source.tar.gz">SeaBIOS 1.16.2 sources</a> and <a href="fetch-and-build-seabios.sh">firmware build instructions</a></li>
-<li><a href="guest-sources.tar.gz">Exact Debian guest source packages, including Linux and statically linked components</a>;
+<a href="https://github.com/coreboot/seabios/tree/rel-1.16.2">SeaBIOS 1.16.2 sources</a> (<a href="https://codeload.github.com/coreboot/seabios/tar.gz/refs/tags/rel-1.16.2">source archive</a>) and <a href="fetch-and-build-seabios.sh">firmware build instructions</a></li>
+<li><a href="debian-sources.html">Exact Debian source download links, including Linux and statically linked components</a>;
 <a href="source-packages.txt">source version inventory</a></li>
 <li>Guest build: <a href="Dockerfile">Dockerfile</a>, <a href="init">init</a>, <a href="slim-guest.sh">slimming script</a>, <a href="collect-sources.sh">source collection script</a>, <a href="boot-init">boot init</a>,
 <a href="pack-guest.sh">filesystem packing</a>, <a href="build-boot-state.mjs">snapshot builder</a>;

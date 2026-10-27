@@ -462,8 +462,8 @@ cross-origin isolation, a VM disk WebSocket or a first-visit service-worker relo
 The VM emulator, [v86](https://github.com/copy/v86), is BSD-2-Clause licensed and
 permits commercial use. Its dependencies retain their own notices. SeaBIOS is
 LGPL-3.0, and the Debian guest packages retain their individual licenses, including
-Linux, Bash, Git and BusyBox copyleft licenses. Matching source archives, version
-inventories, license texts and build scripts are published with the
+Linux, Bash, Git and BusyBox copyleft licenses. Links to exact upstream source archives, version
+inventories, license texts and local build scripts are published with the
 [VM assets](vm-assets/index.html). xterm.js and Monaco Editor are MIT licensed.
 
 The demo images and the video on this site were generated for it and may be reused
