@@ -98,7 +98,8 @@ try {
   console.log('PASS real Linux PTY allocation and I/O');
   await run('mkdir -p /root/repo && cd /root/repo && git init -q && git config user.name Student && git config user.email student@example.com && echo hello > README.md && git add README.md && git commit -qm first');
   assert((await run('cd /root/repo && git log -1 --format=%s')).includes('first'));
-  console.log('PASS Git init, stage, commit, and log inside the guest');
+  assert((await run('cd /root/repo && git branch --show-current')).includes('main'));
+  console.log('PASS Git init (on main), stage, commit, and log inside the guest');
 
   if (process.argv.includes('--full-profile')) {
     await run(String.raw`cd /root/repo && FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --env-filter 'export GIT_AUTHOR_NAME=FullProfile' -- --all`);

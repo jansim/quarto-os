@@ -137,11 +137,10 @@ git add pancakes.md
 git commit -m "Add README and pancake recipe"
 ```
 
-Older git versions call the first branch `master`; let's rename it to `main` and look
-at the history:
+This VM names the first branch `main` (git itself still defaults to `master` before
+version 3.0). Look at the history:
 
 ```{.bash .os-run target="git"}
-git branch -M main
 git log
 ```
 
