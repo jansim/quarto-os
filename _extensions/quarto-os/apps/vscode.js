@@ -199,7 +199,9 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   const panelSash = h('div.qv-panel-sash');
   const panel = h('div.qv-panel', { hidden: true }, panelSash,
     h('div.qv-panel-head', null, h('div.qv-panel-tab.on', { text: 'Terminal' }), h('span.qv-flex'),
-      viewBtn('plus', 'New Terminal (restart shell)', () => newTerminal()),
+      h('span.qv-split', null,
+        viewBtn('plus', 'New Terminal (restart shell)', () => newTerminal()),
+        viewBtn('chevD', 'Launch Profile…', e => profileMenu(e.currentTarget))),
       viewBtn('trash', 'Kill Terminal', () => killTerminal()),
       viewBtn('chevU', 'Maximize Panel Size', e => { panel.classList.toggle('max'); e.currentTarget.innerHTML = panel.classList.contains('max') ? ICONS.chevD : ICONS.chevU; }),
       viewBtn('close', 'Hide Panel', () => togglePanel(false))),
@@ -213,11 +215,39 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   const sbEnc = sbItem('qv-sb-enc', 'Select Encoding'); sbEnc.textContent = 'UTF-8';
   const sbEol = sbItem('qv-sb-eol', 'Select End of Line Sequence');
   const sbLang = sbItem('qv-sb-lang', 'Select Language Mode');
-  const sbTerm = sbItem('qv-sb-term', `Toggle Terminal (${isMac ? '⌃`' : 'Ctrl+`'})`, () => togglePanel());
-  sbTerm.innerHTML = ICONS.terminal;
-  const status = h('div.qv-status', null, sbBranch, h('span.qv-flex'), sbPos, sbIndent, sbEnc, sbEol, sbLang, sbTerm);
+  const status = h('div.qv-status', null, sbBranch, h('span.qv-flex'), sbPos, sbIndent, sbEnc, sbEol, sbLang);
   const notifs = h('div.qv-notifs');
   root.append(h('div.qv-body', null, activity, sidebar, sash, main), status, notifs);
+
+  // Layout controls in the window's title bar, top right (as in VS Code's custom title bar).
+  const layoutBtn = (title, onclick) => h('div.qv-layout-btn', { title, role: 'button', tabindex: '0', 'aria-pressed': 'false',
+    onclick: e => { e.stopPropagation(); onclick(); },
+    onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onclick(); } } });
+  const layoutSide = layoutBtn(`Toggle Primary Side Bar (${MOD}B)`, () => toggleSidebar());
+  const layoutPanel = layoutBtn(`Toggle Panel (${isMac ? '⌃`' : 'Ctrl+`'})`, () => togglePanel());
+  const layout = h('div.qv-layout', null, layoutSide, layoutPanel);
+  // Keep title-bar drags and double-click-to-maximize away from the buttons.
+  for (const ev of ['pointerdown', 'dblclick']) layout.addEventListener(ev, e => e.stopPropagation());
+  const titleBar = win.bar || (win.el && win.el.querySelector(':scope > .qos-titlebar'));
+  if (titleBar) titleBar.append(layout); else status.append(layout);
+  updateLayout();
+  function updateLayout() {
+    const side = !root.classList.contains('qv-side-hidden'), pan = !panel.hidden;
+    layoutSide.innerHTML = ICONS[side ? 'layoutSidebar' : 'layoutSidebarOff'];
+    layoutPanel.innerHTML = ICONS[pan ? 'layoutPanel' : 'layoutPanelOff'];
+    layoutSide.setAttribute('aria-pressed', String(side));
+    layoutPanel.setAttribute('aria-pressed', String(pan));
+  }
+  function profileMenu(anchor) {
+    const r = anchor.getBoundingClientRect();
+    showMenu(r.left, r.bottom + 2, [
+      { label: 'bash', kbd: 'Default', action: () => newTerminal() },
+      '-',
+      { label: 'Split Terminal', disabled: true },
+      { label: 'Configure Terminal Settings', disabled: true },
+      { label: 'Select Default Profile', disabled: true },
+    ], { variant: 'vscode' });
+  }
 
   // ---------------------------------------------------------------- layout behaviour
   let sideW = 220, userToggledSide = false;
@@ -227,7 +257,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     root.classList.toggle('qv-narrow', w < 620);
     root.classList.toggle('qv-tiny', w < 440);
     root.classList.toggle('qv-short', hh < 360);
-    if (!userToggledSide) root.classList.toggle('qv-side-hidden', w < 560);
+    if (!userToggledSide) { root.classList.toggle('qv-side-hidden', w < 560); updateLayout(); }
     if (editor) editor.updateOptions({ minimap: { enabled: monacoEl.clientWidth > 760 } });
     if (sideW > w - 200) setSideW(w - 200);
   }));
@@ -265,6 +295,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     userToggledSide = true;
     const hide = force === undefined ? !root.classList.contains('qv-side-hidden') : !force;
     root.classList.toggle('qv-side-hidden', hide);
+    updateLayout();
     actExplorer.classList.toggle('on', !hide && !viewExplorer.hidden);
     actScm.classList.toggle('on', !hide && !viewScm.hidden);
   }
@@ -1121,7 +1152,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   async function togglePanel(force, focus = true) {
     const show = force === undefined ? panel.hidden : force;
     panel.hidden = !show;
-    sbTerm.classList.toggle('on', show);
+    updateLayout();
     if (show) {
       if (!panelH) { panelH = Math.max(110, Math.round(main.clientHeight * 0.38)); panel.style.height = panelH + 'px'; }
       const t = await ensureTerminal().catch(() => null);
@@ -1145,6 +1176,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     toggleTerminal: f => togglePanel(f),
     dispose() {
       disposed = true;
+      layout.remove();
       offs.forEach(f => f());
       if (gitWatchOff) gitWatchOff();
       for (const off of tree.watch.values()) off();
