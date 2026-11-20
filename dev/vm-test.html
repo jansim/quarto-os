@@ -427,6 +427,17 @@ async function mainSuite() {
     return `echo during exec ${timings.echoDuringExecMedianMs} ms, exec while terminal floods ${timings.execWhileBusyMedianMs} ms`;
   });
 
+  await test('guest userland versions (Debian 13)', async () => {
+    const r = await vm.exec('. /etc/os-release && echo "$VERSION_ID" && git --version && python3 -c "import sys; print(sys.version_info[:2])"');
+    assert(r.code === 0, JSON.stringify(r));
+    const [debian, git, py] = r.output.trim().split('\n');
+    assert(Number(debian) >= 13, 'Debian ' + debian);
+    const [gMaj, gMin] = git.replace(/^git version /, '').split('.').map(Number);
+    assert(gMaj > 2 || (gMaj === 2 && gMin >= 47), git);
+    assert(/^\(3, (1[3-9]|[2-9]\d)\)$/.test(py), 'python ' + py);
+    return `Debian ${debian}, ${git}, Python ${py}`;
+  });
+
   await test('git workflow (exec + terminal)', async () => {
     const r = await vm.exec([
       'set -e', 'mkdir -p ~/repo && cd ~/repo', 'git init -q .',

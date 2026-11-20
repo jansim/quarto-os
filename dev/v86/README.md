@@ -22,8 +22,18 @@ pinned `v86@0.5.472` and Playwright in ignored
 ignored `vm-assets/`. It uses the Debian base manifest pinned in `Dockerfile` and
 signed APT repositories. A separate build stage records source download links
 from the signed APT indexes without downloading source archives. The guest
-package versions follow bookworm; builds are
+userland follows Debian 13 (trixie: Git 2.47, Python 3.13); builds are
 not yet bit-for-bit reproducible against a frozen Debian snapshot.
+
+Debian 13 still builds i386 userland packages but no longer ships an i386
+kernel, and v86 only emulates 32-bit x86. The guest therefore takes only the
+`linux-image-686` kernel (Linux 6.1 LTS) from Debian 12 (bookworm), including
+its security updates. `bookworm-kernel.sources` adds those repositories and
+`bookworm-kernel.pref` gives them a low pin priority, so no other package is
+taken from bookworm. The kernel is independent of the userland ABI. Trixie
+packages install below `/usr`; the guest uses merged `/usr` links for `/bin`,
+`/sbin` and `/lib`. Replace the kernel source if bookworm support ends, for
+example with a custom 32-bit kernel build.
 
 `Dockerfile` assembles i386 packages using an amd64 builder without executing
 32-bit host programs. It keeps the modules required for virtio/9p and retains
