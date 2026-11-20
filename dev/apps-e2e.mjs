@@ -182,6 +182,74 @@ const vmEval = (page, fn, a) => page.evaluate(async ([src, a]) => { const vm = a
   await page.close();
 }
 
+// ------------------------------------------------------------------ vscode: File > Open Folder…
+{
+  const page = await newPage('apps-test.html?boot=0');
+  await page.evaluate(() => QuartoOS.open('vscode', { folder: '~/repo', open: 'README.md', x: 10, y: 10, width: 980, height: 600 }));
+  await page.waitForFunction(() => document.querySelector('.qos-vscode .monaco-editor .view-lines'), null, { timeout: 60000 });
+  await page.waitForTimeout(800);
+  ok((await texts(page, '.qos-titlebar .qv-menu-btn:not(.qv-menu-hamb)')).join(',') === 'File,View,Terminal', 'title bar shows the File, View and Terminal menus');
+  const fileMenu = page.locator('.qos-titlebar .qv-menu-btn[data-menu="File"]');
+  await fileMenu.click();
+  ok((await texts(page, '.qos-menu .qos-menu-label')).includes('Open Folder…'), 'File menu offers Open Folder…');
+  await fileMenu.click();
+  ok(await page.locator('.qos-menu').count() === 0, 'clicking an open menu again closes it');
+  await fileMenu.click();
+  await page.hover('.qos-titlebar .qv-menu-btn[data-menu="View"]');
+  ok((await texts(page, '.qos-menu .qos-menu-label')).includes('Source Control'), 'hovering another menu while one is open switches to it');
+  await page.keyboard.press('Escape');
+  // Make README.md dirty: switching folders must ask to save it.
+  await page.click('.qos-vscode .monaco-editor .view-lines');
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('unsaved\n');
+  await fileMenu.click();
+  await page.click('.qos-menu .qos-menu-item:has-text("Open Folder…")');
+  await page.waitForSelector('.qv-quick');
+  ok(await page.inputValue('.qv-quick-input') === '/home/user/repo/', 'Open Folder starts at the current folder');
+  await page.waitForTimeout(300);
+  ok((await texts(page, '.qv-quick-label')).join(',') === '..,.git,src', 'the dialog lists the parent and the subfolders only');
+  await page.keyboard.type('s');
+  await page.waitForTimeout(200);
+  ok((await texts(page, '.qv-quick-item.sel .qv-quick-label')).join() === 'src', 'typing selects the first matching folder');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  ok(await page.inputValue('.qv-quick-input') === '/home/user/repo/src/', 'Enter on a folder navigates into it');
+  await page.fill('.qv-quick-input', '/home/user/nope/');
+  await page.waitForTimeout(300);
+  ok((await page.textContent('.qv-quick-msg')).includes('does not exist'), 'a missing folder is reported');
+  await page.fill('.qv-quick-input', '~/Documents');
+  await page.waitForTimeout(300);
+  await page.click('.qv-quick-ok');
+  await page.waitForSelector('.qos-dlg');
+  ok((await page.textContent('.qos-dlg-title')).includes('README.md'), 'switching folders asks to save unsaved changes');
+  await page.click('.qos-dlg-btn:has-text("Cancel")');
+  await page.waitForTimeout(300);
+  ok(await page.evaluate(() => QuartoOS.windows.find(w => w.app === 'vscode').instance.folder) === '/home/user/repo'
+    && await page.locator('.qv-tab.dirty').count() === 1, 'Cancel keeps the current folder and the unsaved edit');
+  await fileMenu.click();
+  await page.click('.qos-menu .qos-menu-item:has-text("Open Folder…")');
+  await page.fill('.qv-quick-input', '/home/user/Documents/');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.qos-dlg');
+  await page.click('.qos-dlg-btn:has-text("Don\'t Save")');
+  await page.waitForTimeout(800);
+  ok((await page.textContent('.qv-sec-title')) === 'DOCUMENTS', 'Explorer shows the opened folder');
+  ok((await texts(page, '.qv-tree .qv-label')).join(',') === 'logo.svg,notes.md', 'the tree lists the new folder');
+  ok(await page.locator('.qv-tab').count() === 0, 'editors of the old folder are closed');
+  ok((await page.textContent('.qos-window .qos-title')).trim() === 'Documents', 'window title names the new folder');
+  ok(!(await vmEval(page, vm => vm.readText('~/repo/README.md'))).includes('unsaved'), "Don't Save discards the edit");
+  ok(await page.locator('.qv-sb-branch[hidden]').count() === 1, 'a folder without git hides the branch');
+  await page.click('.qv-tree .qv-row[data-path$="notes.md"]');
+  await page.waitForTimeout(500);
+  ok((await texts(page, '.qv-tab-label')).join() === 'notes.md', 'files open from the new folder');
+  await page.evaluate(() => { const w = QuartoOS.windows.find(w => w.app === 'vscode'); w.el.style.width = '520px'; });
+  await page.waitForTimeout(300);
+  ok(await page.locator('.qos-titlebar .qv-menu-hamb:visible').count() === 1 && await page.locator('.qos-titlebar .qv-menu-btn[data-menu="File"]:visible').count() === 0, 'narrow windows collapse the menus into one button');
+  await shot(page, 'vscode-open-folder');
+  ok(!page.errors.length, 'vscode open folder: no page errors ' + page.errors.join(' | '));
+  await page.close();
+}
+
 // ------------------------------------------------------------------ real core + reveal.js
 if (fs.existsSync(new URL('./apps-slides.html', import.meta.url))) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
