@@ -385,19 +385,33 @@ async function mainSuite() {
     const r2 = await run(s1, c1, 'echo back');
     const ms = performance.now() - t0 - 800;
     assert(ms < 5000, 'sleep not interrupted');
-    // Python REPL (readline, non-canonical): ^C must raise KeyboardInterrupt, not kill python.
-    from = c1.mark();
-    s1.write('python3 -q\r');
-    await c1.wait(/>>> $/, from, 60000);
-    s1.write('1 +');
-    await sleep(200);
-    s1.write('\x03');
-    await c1.wait(/KeyboardInterrupt\r?\n>>> $/, from, 5000);
-    s1.write('print(6 * 7)\r');
-    await c1.wait(/42\r?\n>>> $/, from, 5000);
-    s1.write('exit()\r');
-    await run(s1, c1, 'true');
-    return `prompt back ${Math.round(ms)} ms after ^C; python REPL KeyboardInterrupt ok`;
+    // Python REPLs (non-canonical): ^C must raise KeyboardInterrupt, not kill python.
+    // The basic REPL uses readline. Python 3.13's default REPL (PyREPL) also writes
+    // terminal modes (keypad, bracketed paste) around its prompt, so allow escape
+    // sequences after it there.
+    const ESC = String.raw`(?:\x1b\[[0-9;?]*[A-Za-z]|\x1b[=>])*`;
+    const wait = async (re, mark, ms) => {
+      try { return await c1.wait(re, mark, ms); }
+      catch (e) { throw new Error(e.message + ' — output tail: ' + JSON.stringify(c1.text.slice(mark).slice(-400))); }
+    };
+    for (const [label, cmd, prompt] of [
+      ['readline', 'PYTHON_BASIC_REPL=1 python3 -q', '>>> $'],
+      ['PyREPL', 'python3 -q', String.raw`>>> ${ESC}$`],
+    ]) {
+      from = c1.mark();
+      s1.write(cmd + '\r');
+      await wait(new RegExp(prompt), from, 60000);
+      s1.write('1 +');
+      await sleep(200);
+      s1.write('\x03');
+      await wait(new RegExp(String.raw`KeyboardInterrupt\r?\n[\s\S]*?` + prompt), from, 5000);
+      const after = c1.mark();
+      s1.write('print(6 * 7)\r');
+      await wait(new RegExp(String.raw`42\r?\n[\s\S]*?` + prompt), after, 5000);
+      s1.write('exit()\r');
+      await run(s1, c1, 'true');
+    }
+    return `prompt back ${Math.round(ms)} ms after ^C; readline and PyREPL KeyboardInterrupt ok`;
   });
 
   await test('exec does not block terminals (and vice versa)', async () => {
