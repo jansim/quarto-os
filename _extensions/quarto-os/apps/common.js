@@ -191,6 +191,11 @@ export const ICONS = {
   dot: S(16, '<circle cx="8" cy="8" r="3.6" fill="currentColor" stroke="none"/>'),
   check: S(16, '<path d="m3 8.5 3 3 7-7"/>'),
   plus: S(16, '<path d="M8 3v10M3 8h10"/>'),
+  // VS Code layout controls: filled region = part shown, outline only = hidden
+  layoutSidebar: S(16, '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M2 3h4v10H2z" fill="currentColor" stroke="none"/><path d="M6 2.5v11"/>'),
+  layoutSidebarOff: S(16, '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M6 2.5v11"/>'),
+  layoutPanel: S(16, '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M2 9h12v4H2z" fill="currentColor" stroke="none"/><path d="M1.5 9h13"/>'),
+  layoutPanelOff: S(16, '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 9h13"/>'),
   minus: S(16, '<path d="M3 8h10"/>'),
   discard: S(16, '<path d="M4.5 6.5h5.3a3 3 0 0 1 0 6H7M6.8 4 4.3 6.5 6.8 9"/>'),
   openFile: S(16, '<path d="M9 2.5H4.3a.8.8 0 0 0-.8.8v9.4c0 .4.4.8.8.8h7.4c.4 0 .8-.4.8-.8V6M9 2.5V6h3.5M9 2.5 12.5 6"/>'),

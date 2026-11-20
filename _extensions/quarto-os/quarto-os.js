@@ -465,31 +465,37 @@ function mountBrowser(win, opts) {
 // == desktop
 const LOGO = '<svg viewBox="0 0 16 16"><path d="M8 1.2c.5 3.4 2.4 5.3 5.8 5.8-3.4.5-5.3 2.4-5.8 5.8-.5-3.4-2.4-5.3-5.8-5.8C5.6 6.5 7.5 4.6 8 1.2z"/><circle cx="13" cy="13" r="1.6"/></svg>';
 
+// The About panel is an ordinary window on this desktop (one per desktop).
+// Calls are chained, so a quick double click still opens a single window.
 function showAbout(desk) {
-  if (desk.about) { desk.about.showModal(); return; }
-  const dialog = desk.about = h('dialog', 'qos-about');
-  const title = h('h2', '', 'Quarto OS');
-  title.id = 'qos-about-' + (++uid);
-  dialog.setAttribute('aria-labelledby', title.id);
-  const mark = h('div', 'qos-about-logo', LOGO);
-  mark.setAttribute('aria-hidden', 'true');
-  const versions = h('dl', 'qos-about-versions');
-  const row = (name, version) => versions.append(h('dt', '', esc(name)), h('dd', '', esc(version)));
-  row('Quarto OS', QOS.version);
-  const generator = D.querySelector('meta[name="generator"]');
-  if (generator && /^quarto-/i.test(generator.content)) row('Quarto', generator.content.replace(/^quarto-/i, ''));
-  const close = btn('qos-about-close', 'Close');
-  close.addEventListener('click', () => dialog.close());
-  dialog.append(mark, title, h('p', '', 'A desktop for your documents. Real Linux apps, running in your browser.'), versions,
-    h('p', '', '<a href="https://github.com/jansim/quarto-os" target="_blank" rel="noopener">Source &amp; documentation ↗</a>'), close);
-  desk.el.appendChild(dialog);
-  dialog.showModal();
-  // Reading version metadata never boots the VM or loads an editor or terminal.
-  import(baseUrl + 'apps/versions.js').then(v => {
-    row('v86', v.V86_VERSION);
-    row('Monaco Editor', config.cdn && config.cdn.monaco ? 'Custom build' : v.MONACO_VERSION);
-    row('xterm.js', v.XTERM_VERSION);
-  }).catch(() => row('Component versions', 'Unavailable'));
+  return desk.about = Promise.resolve(desk.about).catch(() => null).then(cur => {
+    if (alive(cur)) {
+      if (cur.state === 'minimized') cur.restore();
+      cur.focus();
+      return cur;
+    }
+    const panel = h('div', 'qos-about');
+    const mark = h('div', 'qos-about-logo', LOGO);
+    mark.setAttribute('aria-hidden', 'true');
+    const versions = h('dl', 'qos-about-versions');
+    const row = (name, version) => versions.append(h('dt', '', esc(name)), h('dd', '', esc(version)));
+    row('Quarto OS', QOS.version);
+    const generator = D.querySelector('meta[name="generator"]');
+    if (generator && /^quarto-/i.test(generator.content)) row('Quarto', generator.content.replace(/^quarto-/i, ''));
+    panel.append(mark, h('h2', '', 'Quarto OS'), h('p', '', 'A desktop for your documents. Real Linux apps, running in your browser.'), versions,
+      h('p', '', '<a href="https://github.com/jansim/quarto-os" target="_blank" rel="noopener">Source &amp; documentation ↗</a>'));
+    // Reading version metadata never boots the VM or loads an editor or terminal.
+    import(baseUrl + 'apps/versions.js').then(v => {
+      row('v86', v.V86_VERSION);
+      row('Monaco Editor', config.cdn && config.cdn.monaco ? 'Custom build' : v.MONACO_VERSION);
+      row('xterm.js', v.XTERM_VERSION);
+    }).catch(() => row('Component versions', 'Unavailable'));
+    const width = 340;
+    const opts = { target: desk.el, title: 'About Quarto OS', content: panel, width,
+      x: Math.max(0, Math.round((desk.host.el.clientWidth - width) / 2)), y: 24 };
+    if (desk.el.classList.contains('qos-desk-dark')) opts.theme = 'dark';
+    return open('content', opts);
+  });
 }
 
 class Desktop {
@@ -508,8 +514,8 @@ class Desktop {
     kids.forEach(k => { if (!k.classList.contains('qos-window')) extra.appendChild(k); });
     if (extra.firstChild) screen.appendChild(extra);
     if (o.menubar == null || yes(o.menubar)) {
-      this.menubar = h('div', 'qos-menubar', '<button type="button" class="qos-mb-logo" aria-label="About Quarto OS" title="About Quarto OS" aria-haspopup="dialog">' + LOGO + '</button><b class="qos-mb-app"></b>' +
-        '<span class="qos-mb-right"><span class="qos-mb-status"></span><span class="qos-mb-clock"></span></span>');
+      this.menubar = h('div', 'qos-menubar', '<button type="button" class="qos-mb-logo" aria-label="About Quarto OS" title="About Quarto OS">' + LOGO + '</button><b class="qos-mb-app"></b>' +
+        '<span class="qos-mb-right"><span class="qos-mb-clock"></span></span>');
       this.menubar.querySelector('.qos-mb-logo').addEventListener('click', () => showAbout(this));
       el.appendChild(this.menubar);
     } else el.classList.add('qos-nomenubar');
@@ -706,11 +712,8 @@ let vmP = null;
 function vm() {
   if (vmP) return vmP;
   vmP = import(baseUrl + 'vm/vm.js').then(m => m.createVM(config.vm || {}, { baseUrl }));
-  vmP.then(v => {
-    const st = s => $$('.qos-mb-status').forEach(e => { e.textContent = s; e.classList.toggle('qos-on', !!s); });
-    if (v && v.on) v.on('status', s => st(String(s || '')));
-    if (v && v.ready && v.ready.then) v.ready.then(() => setTimeout(() => st(''), 1200), () => st('VM error'));
-  }, () => { vmP = null; });
+  // Boot progress is shown inside each app window (terminal, editor, explorer).
+  vmP.catch(() => { vmP = null; });
   return vmP;
 }
 

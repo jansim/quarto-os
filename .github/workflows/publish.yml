@@ -58,7 +58,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vm-assets
-          key: vm-assets-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vm-generation.outputs.week }}-${{ hashFiles('dev/v86/Dockerfile', 'dev/v86/.dockerignore', 'dev/v86/init', 'dev/v86/boot-init', 'dev/v86/*.sh', 'dev/v86/build-boot-state.mjs', 'dev/v86/source-links.mjs', 'dev/v86/package*.json', 'dev/v86/tools/**') }}
+          key: vm-assets-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vm-generation.outputs.week }}-${{ hashFiles('dev/v86/Dockerfile', 'dev/v86/.dockerignore', 'dev/v86/init', 'dev/v86/boot-init', 'dev/v86/bookworm-kernel.*', 'dev/v86/*.sh', 'dev/v86/build-boot-state.mjs', 'dev/v86/source-links.mjs', 'dev/v86/package*.json', 'dev/v86/tools/**') }}
 
       - name: Build v86 runtime, guest and source links
         if: steps.vm-assets.outputs.cache-hit != 'true'

@@ -17,7 +17,7 @@ for package in /var/cache/apt/archives/*_i386.deb /var/cache/apt/archives/*_all.
     dpkg-deb -f "$package" "$field" | tr ',' '\n' | sed -n 's/^ *\([^ ]*\) *(= \([^)]*\)).*/\1=\2/p'
   done
 done | sort -u > /sources/packages.txt
-sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/*.sources
 apt-get update -o APT::Update::Error-Mode=any
 cd /sources
 while read -r source; do

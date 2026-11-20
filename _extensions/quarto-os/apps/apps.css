@@ -364,8 +364,7 @@
 .qos-vscode .qv-sb-item { display: inline-flex; align-items: center; gap: 4px; height: 100%; padding: 0 6px; cursor: default; }
 .qos-vscode .qv-sb-item[role="button"] { cursor: pointer; }
 .qos-vscode .qv-sb-item:hover { background: rgba(255,255,255,.12); }
-.qos-vscode .qv-sb-item .qa-ic svg, .qos-vscode .qv-sb-term svg { width: 14px; height: 14px; }
-.qos-vscode .qv-sb-term.on { color: #fff; }
+.qos-vscode .qv-sb-item .qa-ic svg { width: 14px; height: 14px; }
 .qos-vscode.qv-narrow .qv-sb-enc, .qos-vscode.qv-narrow .qv-sb-eol, .qos-vscode.qv-narrow .qv-sb-indent { display: none; }
 .qos-vscode.qv-tiny .qv-sb-lang { display: none; }
 
@@ -376,3 +375,17 @@
 .qos-vscode .qv-notif-ic { flex: none; display: inline-flex; margin-top: 1px; color: #3794ff; }
 .qos-vscode .qv-notif.error .qv-notif-ic { color: #f14c4c; }
 .qos-vscode .qv-notif.warning .qv-notif-ic { color: #cca700; }
+
+/* VS Code layout controls, placed in the window title bar (top right) */
+.qv-layout { position: absolute; right: 8px; top: 50%; display: flex; gap: 2px; transform: translateY(-50%); }
+.qos-vscode .qv-layout { position: static; transform: none; margin-left: 4px; }
+.qv-layout-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; color: inherit; opacity: .8; cursor: pointer; }
+.qv-layout-btn:hover { opacity: 1; background: rgba(128,128,128,.24); }
+.qv-layout-btn:focus-visible { outline: 1px solid #0078d4; outline-offset: -1px; }
+.qv-layout-btn svg { width: 16px; height: 16px; }
+/* "+" and its profile dropdown form one split button, as in VS Code's terminal panel */
+.qos-vscode .qv-split { display: inline-flex; align-items: center; border-radius: 5px; }
+.qos-vscode .qv-split:hover { background: rgba(90,93,94,.31); }
+.qos-vscode .qv-split .qv-vbtn:hover { background: rgba(90,93,94,.31); }
+.qos-vscode .qv-split .qv-vbtn:last-child { width: 14px; }
+.qos-vscode .qv-split .qv-vbtn:last-child svg { width: 12px; height: 12px; }

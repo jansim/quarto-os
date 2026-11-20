@@ -68,7 +68,7 @@ JS
 
 node "$here/source-links.mjs" "$site_assets"
 curl -fsSL https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.2/COPYING -o "$site_assets/COPYING"
-cp "$here/Dockerfile" "$here/init" "$here/collect-sources.sh" "$here/slim-guest.sh" "$here/boot-init" "$here/pack-guest.sh" "$here/build-boot-state.mjs" "$here/source-links.mjs" "$site_assets/"
+cp "$here/Dockerfile" "$here/bookworm-kernel.sources" "$here/bookworm-kernel.pref" "$here/init" "$here/collect-sources.sh" "$here/slim-guest.sh" "$here/boot-init" "$here/pack-guest.sh" "$here/build-boot-state.mjs" "$here/source-links.mjs" "$site_assets/"
 mkdir -p "$site_assets/tools"
 cp "$here/tools/"* "$site_assets/tools/"
 cat > "$site_assets/index.html" <<HTML
@@ -83,7 +83,7 @@ package copyright notices are retained in the guest under /usr/share/doc.</p>
 <a href="https://github.com/coreboot/seabios/tree/rel-1.16.2">SeaBIOS 1.16.2 sources</a> (<a href="https://codeload.github.com/coreboot/seabios/tar.gz/refs/tags/rel-1.16.2">source archive</a>) and <a href="fetch-and-build-seabios.sh">firmware build instructions</a></li>
 <li><a href="debian-sources.html">Exact Debian source download links, including Linux and statically linked components</a>;
 <a href="source-packages.txt">source version inventory</a></li>
-<li>Guest build: <a href="Dockerfile">Dockerfile</a>, <a href="init">init</a>, <a href="slim-guest.sh">slimming script</a>, <a href="collect-sources.sh">source collection script</a>, <a href="boot-init">boot init</a>,
+<li>Guest build: <a href="Dockerfile">Dockerfile</a> with <a href="bookworm-kernel.sources">kernel repositories</a> and <a href="bookworm-kernel.pref">pinning</a>, <a href="init">init</a>, <a href="slim-guest.sh">slimming script</a>, <a href="collect-sources.sh">source collection script</a>, <a href="boot-init">boot init</a>,
 <a href="pack-guest.sh">filesystem packing</a>, <a href="build-boot-state.mjs">snapshot builder</a>;
 <a href="tools/README.md">pinned upstream filesystem tools</a> and <a href="tools/LICENSE">their license</a></li>
 </ul>

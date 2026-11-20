@@ -1,6 +1,8 @@
 *
 !Dockerfile
 !init
+!bookworm-kernel.sources
+!bookworm-kernel.pref
 !collect-sources.sh
 !slim-guest.sh
 !boot-init

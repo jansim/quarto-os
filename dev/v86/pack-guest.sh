@@ -11,7 +11,7 @@ find /guest/lib/modules -type f -name '*.ko*' | while read -r file; do
   grep -qxF "$file" /keep-modules || rm "$file"
 done
 case "$profile" in slim) sh /slim-guest.sh ;; full) ;; *) echo "Unknown GUEST_PROFILE: $profile" >&2; exit 1 ;; esac
-rm -rf /guest/boot /guest/usr/share/man /guest/usr/share/locale /guest/usr/lib/python3.11/test
+rm -rf /guest/boot /guest/usr/share/man /guest/usr/share/locale /guest/usr/lib/python3.*/test
 for directory in /guest/lib/modules/*; do depmod -b /guest "$(basename "$directory")"; done
 mkdir -p /guest/data /guest/mnt /rootfs
 chmod 777 /guest/data
