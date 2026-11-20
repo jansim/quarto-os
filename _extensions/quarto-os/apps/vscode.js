@@ -146,6 +146,7 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
   monacoReady.catch(() => {});
 
   let vm = null, wm = null, home = '/home/user', folder = null, disposed = false, monaco = null;
+  let folderGen = 0;   // bumped by openFolder(); async results for an older folder are dropped
   let editor = null, diffEditor = null, fallbackTA = null;
   const offs = [];
   const tabs = [];
@@ -238,6 +239,69 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     layoutSide.setAttribute('aria-pressed', String(side));
     layoutPanel.setAttribute('aria-pressed', String(pan));
   }
+  // ---------------------------------------------------------------- title-bar menus
+  // VS Code's custom title bar (Linux / Windows): File, View and Terminal menus after the window
+  // controls; a single "hamburger" menu when the window is narrow or has no title bar.
+  const MENUS = {
+    File: () => [
+      { label: 'New File…', disabled: !folder, action: () => newItem('file', selectedDir()) },
+      { label: 'New Folder…', disabled: !folder, action: () => newItem('dir', selectedDir()) },
+      '-',
+      { label: 'Open Folder…', disabled: !folder, action: () => pickFolder() },
+      '-',
+      { label: 'Save', kbd: `${MOD}S`, disabled: !(active && active.kind === 'file'), action: () => save(active) },
+      { label: 'Save All', disabled: !tabs.some(isDirty), action: () => saveAll() },
+      '-',
+      { label: 'Close Editor', disabled: !active, action: () => closeTab(active) },
+      { label: 'Close All Editors', disabled: !tabs.length, action: () => closeAllTabs() },
+    ],
+    View: () => [
+      { label: 'Explorer', kbd: `${MOD}Shift+E`, action: () => { showView('explorer', true); treeEl.focus(); } },
+      { label: 'Source Control', kbd: isMac ? '⌃⇧G' : 'Ctrl+Shift+G', action: () => showView('scm', true) },
+      { label: 'Terminal', kbd: isMac ? '⌃`' : 'Ctrl+`', action: () => togglePanel(true) },
+      '-',
+      { label: 'Toggle Primary Side Bar', kbd: `${MOD}B`, action: () => toggleSidebar() },
+      { label: 'Toggle Panel', action: () => togglePanel() },
+    ],
+    Terminal: () => [
+      { label: 'New Terminal', action: () => newTerminal() },
+      { label: 'Kill Terminal', disabled: !term, action: () => killTerminal() },
+    ],
+  };
+  const menuBtn = (name, attrs) => h('div.qv-menu-btn', { role: 'menuitem', tabindex: '0', 'aria-haspopup': 'menu', 'data-menu': name, ...attrs });
+  const menuHamb = menuBtn('*', { title: 'Application Menu', 'aria-label': 'Application Menu', html: ICONS.list, class: 'qv-menu-btn qv-menu-hamb' });
+  const menuBtns = Object.keys(MENUS).map(name => menuBtn(name, { text: name }));
+  const menubar = h('div.qv-menubar', { role: 'menubar' }, menuHamb, ...menuBtns);
+  let menuOpen = null, menuWasOpen = null;
+  function openTopMenu(btn) {
+    const name = btn.dataset.menu;
+    const items = name === '*' ? Object.values(MENUS).flatMap((f, i) => i ? ['-', ...f()] : f()) : MENUS[name]();
+    const r = btn.getBoundingClientRect();
+    menuOpen = { name, el: showMenu(r.left, r.bottom + 2, items, { variant: 'vscode' }) };
+  }
+  // showMenu closes on any outside pointerdown (document capture), before the button sees it:
+  // remember which menu was open so clicking its button again closes it instead of reopening.
+  const onWinDown = () => { menuWasOpen = menuOpen && menuOpen.el.isConnected ? menuOpen.name : null; };
+  window.addEventListener('pointerdown', onWinDown, true);
+  offs.push(() => window.removeEventListener('pointerdown', onWinDown, true));
+  for (const b of [menuHamb, ...menuBtns]) {
+    b.addEventListener('click', e => { e.stopPropagation(); if (menuWasOpen === b.dataset.menu) { menuWasOpen = null; return; } openTopMenu(b); });
+    b.addEventListener('pointerenter', () => { if (menuOpen && menuOpen.el.isConnected && menuOpen.name !== b.dataset.menu) openTopMenu(b); });
+    b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') { e.preventDefault(); openTopMenu(b); } });
+  }
+  for (const ev of ['pointerdown', 'dblclick']) menubar.addEventListener(ev, e => e.stopPropagation());
+  if (titleBar) { titleBar.classList.add('qv-has-menubar'); titleBar.append(menubar); }
+  else { menubar.classList.add('qv-compact'); activity.prepend(menubar); }
+  offs.push(onResize(root, w => {
+    if (!titleBar) return;
+    // Start just after the window controls, wherever the chrome puts them.
+    const lights = titleBar.querySelector('.qos-lights');
+    if (lights) menubar.style.left = (lights.offsetLeft + lights.offsetWidth + 8) + 'px';
+    const compact = w < 640;
+    menubar.classList.toggle('qv-compact', compact);
+    titleBar.classList.toggle('qv-compact-menubar', compact);
+  }));
+
   function profileMenu(anchor) {
     const r = anchor.getBoundingClientRect();
     showMenu(r.left, r.bottom + 2, [
@@ -642,8 +706,11 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     .sort((a, b) => ((b.type === 'dir') - (a.type === 'dir')) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
 
   async function loadDir(dir) {
-    try { tree.children.set(dir, sortEntries(await vm.ls(dir))); }
-    catch (e) { tree.children.set(dir, []); }
+    const gen = folderGen;
+    let list = [];
+    try { list = sortEntries(await vm.ls(dir)); } catch (e) { /* unreadable: show it empty */ }
+    if (gen !== folderGen || disposed) return;
+    tree.children.set(dir, list);
     if (!tree.watch.has(dir)) tree.watch.set(dir, wm.watch(dir, list => { tree.children.set(dir, sortEntries(list)); renderTree(); }));
   }
   async function refreshTree() {
@@ -870,8 +937,10 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     if (git.busy) { git.again = true; return; }
     git.busy = true;
     try {
+      const gen = folderGen;
       const r = await vmExec(vm, 'git rev-parse --show-toplevel && git -c core.quotepath=false --no-optional-locks status --porcelain -b -uall', folder);
       if (disposed) return;
+      if (gen !== folderGen) { git.again = true; return; }
       const out = String(r.output || '').replace(/\r/g, '');
       if (r.code !== 0) {
         git.isRepo = /not a git repository/i.test(out) ? false : git.isRepo;
@@ -1137,6 +1206,121 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     if (t.mod.getValue() !== r) t.mod.setValue(r);
   }, 300);
 
+  // ================================================================ open folder
+  async function saveAll() { for (const t of tabs.filter(isDirty)) if (!(await save(t))) return false; return true; }
+  async function closeAllTabs() { for (const t of [...tabs]) if (!(await closeTab(t))) return false; return true; }
+
+  /** Switch the window to another folder, as VS Code does when a folder is opened. */
+  async function openFolder(path) {
+    if (!vm || disposed) return false;
+    path = expandHome(path, home);
+    const st = await vm.stat(path).catch(() => null);
+    if (!st || st.type !== 'dir') { notify(`The folder ${tildify(path, home)} does not exist.`, 'error'); return false; }
+    if (path === folder) return true;
+    // Editors belong to the old workspace; unsaved changes get the usual save prompt.
+    if (!(await closeAllTabs())) return false;
+    folderGen++;
+    for (const off of tree.watch.values()) off();
+    tree.watch.clear(); tree.children.clear(); tree.expanded.clear();
+    tree.sel = null; tree.edit = null;
+    if (gitWatchOff) { gitWatchOff(); gitWatchOff = null; }
+    Object.assign(git, { isRepo: null, root: null, branch: '', unborn: false, staged: [], changes: [], deco: new Map(), error: null });
+    scmMsg.value = ''; autoGrow();
+    folder = path;
+    folderHead.querySelector('.qv-sec-title').textContent = basename(folder).toUpperCase();
+    treeEl.hidden = false;
+    folderHead.querySelector('.qv-twist').innerHTML = ICONS.chevD;
+    updateTitle(); updateBranch(); renderScm(); updateEditorArea();
+    // The integrated terminal restarts in the new folder.
+    const termShown = !panel.hidden;
+    killTerminal();
+    if (termShown) togglePanel(true, false);
+    await refreshTree();
+    refreshGit();
+    return true;
+  }
+
+  // The simple file dialog VS Code uses on Linux: a path input with the folders of its directory.
+  let picker = null;
+  function pickFolder() {
+    if (!vm || !folder || disposed) return;
+    if (picker) { picker.input.focus(); return; }
+    const input = h('input.qv-quick-input', { type: 'text', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Folder path' });
+    const okBtn = h('button.qv-btn.qv-quick-ok', { type: 'button' }, 'OK');
+    const msg = h('div.qv-quick-msg', { hidden: true });
+    const list = h('div.qv-quick-list', { role: 'listbox' });
+    const box = h('div.qv-quick', { role: 'dialog', 'aria-label': 'Open Folder' },
+      h('div.qv-quick-title', { text: 'Open Folder' }), h('div.qv-quick-row', null, input, okBtn), msg, list);
+    const prevFocus = document.activeElement;
+    let dir = null, entries = [], items = [], sel = -1, seq = 0;
+    const split = v => { const i = v.lastIndexOf('/'); return i < 0 ? [null, v] : [expandHome(v.slice(0, i + 1) || '/', home), v.slice(i + 1)]; };
+    const say = text => { msg.textContent = text || ''; msg.hidden = !text; };
+
+    async function update() {
+      const [d, filter] = split(input.value);
+      if (d && d !== dir) {
+        const my = ++seq;
+        let ls = null;
+        try { ls = await vm.ls(d); } catch (e) { /* missing or unreadable */ }
+        if (my !== seq || picker !== self) return;
+        dir = d;
+        entries = ls && ls.filter(e => e.type === 'dir').map(e => e.name)
+          .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
+      }
+      render(d ? filter : input.value);
+    }
+    function render(filter) {
+      const f = filter.toLowerCase();
+      items = [];
+      if (dir && dir !== '/' && '..'.startsWith(f)) items.push({ label: '..', path: dirname(dir) });
+      for (const n of entries || []) if (n.toLowerCase().startsWith(f)) items.push({ label: n, path: join(dir, n) });
+      if (sel >= items.length) sel = items.length - 1;
+      if (sel < 0 && f && items.length) sel = 0;   // typing a name selects the first match
+      say(entries ? '' : `The folder ${input.value.replace(/[^/]*$/, '')} does not exist.`);
+      list.replaceChildren(...items.map((it, i) => h('div.qv-quick-item' + (i === sel ? '.sel' : ''), { role: 'option', 'data-i': String(i), title: it.path },
+        h('span.qa-ic', { html: ICONS.folder }), h('span.qv-quick-label', { text: it.label }))));
+      const cur = list.children[sel];
+      if (cur) cur.scrollIntoView({ block: 'nearest' });
+    }
+    function navigate(p) { input.value = p === '/' ? '/' : p + '/'; sel = -1; update(); input.focus(); }
+    async function accept() {
+      const [d, filter] = split(input.value);
+      const target = d ? (filter ? join(d, filter) : d) : expandHome(input.value || '~', home);
+      const st = await vm.stat(target).catch(() => null);
+      if (picker !== self) return;
+      if (!st || st.type !== 'dir') { say(`${input.value} is not a folder.`); return; }
+      close(false);
+      openFolder(target);
+    }
+    function close(restoreFocus = true) {
+      if (picker !== self) return;
+      picker = null;
+      box.remove();
+      root.removeEventListener('pointerdown', onDown, true);
+      if (restoreFocus && prevFocus && prevFocus.focus && root.contains(prevFocus)) prevFocus.focus({ preventScroll: true });
+    }
+    const onDown = e => { if (!box.contains(e.target)) close(); };
+    input.addEventListener('input', () => { sel = -1; update(); });
+    input.addEventListener('keydown', e => {
+      let handled = true;
+      if (e.key === 'ArrowDown') { sel = items.length ? (sel + 1) % items.length : -1; render(split(input.value)[1]); }
+      else if (e.key === 'ArrowUp') { sel = items.length ? (sel <= 0 ? items.length - 1 : sel - 1) : -1; render(split(input.value)[1]); }
+      else if (e.key === 'Enter') { if (sel >= 0 && items[sel]) navigate(items[sel].path); else accept(); }
+      else if (e.key === 'Tab') { const it = items[sel >= 0 ? sel : 0]; if (it && (sel >= 0 || items.length === 1)) navigate(it.path); }
+      else if (e.key === 'Escape') close();
+      else handled = false;
+      if (handled) { e.preventDefault(); e.stopPropagation(); }
+    });
+    list.addEventListener('click', e => { const it = items[+(e.target.closest('.qv-quick-item') || {}).dataset?.i]; if (it) navigate(it.path); });
+    okBtn.addEventListener('click', () => accept());
+    const self = picker = { input, close };
+    root.append(box);
+    root.addEventListener('pointerdown', onDown, true);
+    input.value = folder === '/' ? '/' : folder + '/';
+    update();
+    input.focus();
+  }
+
   // ================================================================ integrated terminal
   let term = null, termP = null;
   function newTerminal() { killTerminal(); togglePanel(true); }
@@ -1174,9 +1358,14 @@ export async function mount(win, opts = {}, os = window.QuartoOS) {
     save: () => save(active),
     focus() { if (editor && active && active.kind === 'file') editor.focus(); else treeEl.focus(); },
     toggleTerminal: f => togglePanel(f),
+    openFolder: path => ready.then(() => openFolder(path)),
+    pickFolder: () => ready.then(() => pickFolder()),
     dispose() {
       disposed = true;
+      if (picker) picker.close(false);
       layout.remove();
+      menubar.remove();
+      if (titleBar) titleBar.classList.remove('qv-has-menubar', 'qv-compact-menubar');
       offs.forEach(f => f());
       if (gitWatchOff) gitWatchOff();
       for (const off of tree.watch.values()) off();
