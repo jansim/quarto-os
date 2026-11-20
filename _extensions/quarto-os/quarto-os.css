@@ -309,9 +309,6 @@ code.qos-run.qos-flash, .qos-run-wrap.qos-flash pre { animation: qos-flash .5s; 
 .qos-mb-logo:hover { background: rgba(255,255,255,.2); }
 .qos-mb-logo:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
 .qos-mb-right { display: flex; align-items: center; gap: 13px; margin-left: auto; padding-right: 6px; }
-.qos-mb-status { display: none; align-items: center; gap: 6px; font-size: 12px; opacity: .92; }
-.qos-mb-status.qos-on { display: inline-flex; }
-.qos-mb-status.qos-on::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #ffd60a; box-shadow: 0 0 6px #ffd60a; animation: qos-breathe 1.2s infinite; }
 
 .qos-about { box-sizing: border-box; width: min(380px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 28px; overflow: auto; border: 1px solid rgba(0,0,0,.16); border-radius: 14px; background: #fff; color: #1d1d1f; box-shadow: 0 18px 60px rgba(0,0,0,.3); font: 14px/1.5 var(--qos-font); text-align: center; text-shadow: none; white-space: normal; }
 .qos-about::backdrop { background: rgba(0,0,0,.3); }

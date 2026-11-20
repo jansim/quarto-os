@@ -509,7 +509,7 @@ class Desktop {
     if (extra.firstChild) screen.appendChild(extra);
     if (o.menubar == null || yes(o.menubar)) {
       this.menubar = h('div', 'qos-menubar', '<button type="button" class="qos-mb-logo" aria-label="About Quarto OS" title="About Quarto OS" aria-haspopup="dialog">' + LOGO + '</button><b class="qos-mb-app"></b>' +
-        '<span class="qos-mb-right"><span class="qos-mb-status"></span><span class="qos-mb-clock"></span></span>');
+        '<span class="qos-mb-right"><span class="qos-mb-clock"></span></span>');
       this.menubar.querySelector('.qos-mb-logo').addEventListener('click', () => showAbout(this));
       el.appendChild(this.menubar);
     } else el.classList.add('qos-nomenubar');
@@ -706,11 +706,8 @@ let vmP = null;
 function vm() {
   if (vmP) return vmP;
   vmP = import(baseUrl + 'vm/vm.js').then(m => m.createVM(config.vm || {}, { baseUrl }));
-  vmP.then(v => {
-    const st = s => $$('.qos-mb-status').forEach(e => { e.textContent = s; e.classList.toggle('qos-on', !!s); });
-    if (v && v.on) v.on('status', s => st(String(s || '')));
-    if (v && v.ready && v.ready.then) v.ready.then(() => setTimeout(() => st(''), 1200), () => st('VM error'));
-  }, () => { vmP = null; });
+  // Boot progress is shown inside each app window (terminal, editor, explorer).
+  vmP.catch(() => { vmP = null; });
   return vmP;
 }
 
