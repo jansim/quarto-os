@@ -486,7 +486,7 @@ function showAbout(desk) {
       h('p', '', '<a href="https://github.com/jansim/quarto-os" target="_blank" rel="noopener">Source &amp; documentation ↗</a>'));
     // Reading version metadata never boots the VM or loads an editor or terminal.
     import(baseUrl + 'apps/versions.js').then(v => {
-      row('v86', v.V86_VERSION);
+      row('unkernel', v.UNKERNEL_VERSION);
       row('Monaco Editor', config.cdn && config.cdn.monaco ? 'Custom build' : v.MONACO_VERSION);
       row('xterm.js', v.XTERM_VERSION);
     }).catch(() => row('Component versions', 'Unavailable'));

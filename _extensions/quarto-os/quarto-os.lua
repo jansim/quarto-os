@@ -7,7 +7,7 @@
     [label]{.os-launch ...}                        -> <button class="qos-launch" data-qos-opts='{…}'>
     `cmd`{.os-run target=id} / ```{.os-run}       -> class "qos-run" + data-qos-target
   and adds the JSON config (`quarto-os:` YAML, camelCase keys + usesVM), the
-  html dependency. v86 does not require cross-origin isolation.
+  html dependency. The VM (unkernel) needs no cross-origin isolation.
   Only active for HTML formats that run JavaScript (html, revealjs, …).
 ]]
 

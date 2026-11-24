@@ -13,11 +13,14 @@ source control, all running in the reader's browser.
 - **Content windows** around any Markdown: images, video, code, callouts — inline,
   side by side, or floating and draggable; light and dark chrome.
 - **Apps on a real VM**: `terminal`, `vscode`, `explorer` (and `browser`), all backed by
-  one Debian VM per page, powered by [v86](https://github.com/copy/v86) (BSD-2-Clause). No server needed.
+  one Linux VM per page, powered by [unkernel](https://github.com/pithings/unkernel): a
+  real Linux kernel compiled to WebAssembly. `git` is ready at once; other commands
+  install on first use. No server needed.
 - **Desktop** with wallpaper, menubar and dock; multiple instances of each app.
 - **Launch buttons** and clickable **run snippets** that type commands into a terminal.
-- **Lazy**: pages only load a small core; xterm.js, Monaco and v86 are loaded when
+- **Lazy**: pages only load a small core; xterm.js, Monaco and the VM are loaded when
   a window needs them.
+- **Self-contained**: build the VM assets once and the rendered site works offline.
 
 ## Install
 
@@ -85,10 +88,10 @@ quarto-os:
   vm:
     asset-base: https://jansim.github.io/quarto-os/vm-assets/
     memory: 512           # guest RAM in MiB
-    boot-snapshot: true  # restore the prebuilt clean boot state
     boot-timeout: 120000  # milliseconds
-    persist: false        # keep VM disk changes across reloads (IndexedDB)
-    cache-id: quarto-os   # IndexedDB name for the overlay
+    network: true         # guest internet via a Wisp relay (true, false or wss:// URL)
+    persist: false        # keep VM file changes across reloads (IndexedDB)
+    cache-id: quarto-os   # IndexedDB name for those changes
     autoboot: false       # boot on page load instead of on first VM window
     setup: |              # bash script run once per fresh VM before apps attach
       mkdir -p ~/repo
@@ -102,45 +105,51 @@ The full reference is on the [docs site](https://jansim.github.io/quarto-os/#ref
   attaches the small core (`quarto-os.js` + `quarto-os.css`).
 - The core draws windows and desktops and lazy-loads app modules (`apps/*.js`) when a
   window needs them.
-- The apps share **one VM per page** (`vm/vm.js`). v86 boots Debian i386 in
-  WebAssembly. The small C agent (`agent/qos-agent.c`) serves file operations,
-  executes commands as uid 1000, and multiplexes six independent Linux PTYs over
-  one serial channel. A prebuilt boot snapshot skips kernel startup, and root
-  files load on demand from the static asset host. Each terminal has its own size and job control.
+- The apps share **one VM per page** (`vm/vm.js`).
+  [unkernel](https://github.com/pithings/unkernel) runs a real Linux kernel as
+  WebAssembly and boots in well under a second. Its guest is Alpine Linux with
+  `bash` and `git`, read on demand from a compressed image on the static asset host.
+  Terminals are guest ptys; file operations and `exec()` run as guest programs
+  (uid 1000), so there is no agent of our own.
+- Like on [unkernel.dev](https://unkernel.dev), a missing command is installed with
+  `apk` when you first type it in a terminal (`htop`, `python3`, `nano`, …). This needs
+  the guest network: a [Wisp](https://github.com/MercuryWorkshop/wisp-protocol) relay,
+  by default unkernel's, which only accepts known origins; set `vm.network` to your own
+  relay (`wss://…`) if installs fail. Lessons can also bake tools into the image (below).
 - The VM works on ordinary static hosts, including GitHub Pages. It needs no
-  cross-origin isolation headers or first-visit service-worker reload.
-- Changes are temporary by default. `persist: true` saves compressed machine
-  snapshots atomically in IndexedDB; `await vm.save()` explicitly checkpoints
-  before navigating away. A restored page closes stale terminal processes and
-  reruns setup only if its script changed. Old CheerpX overlays are not imported.
+  cross-origin isolation headers or service worker.
+- Changes are temporary by default. `persist: true` keeps the guest's file changes
+  (home and installed packages) in IndexedDB; setup reruns only if its script changed.
 
-Limitations: six terminals per page, no guest network, 512 MiB of guest
-RAM, plus temporary snapshot memory. Uncached root files require access to the
-static asset host after boot. Chromium and Firefox are recommended.
-Snapshots are versioned against the runtime, guest image and agent; rebuilding any
-of them starts a fresh cache. See the [docs](https://jansim.github.io/quarto-os/#limitations).
+Limitations: needs a browser with
+[JSPI](https://github.com/WebAssembly/js-promise-integration) (Chrome/Edge 137+,
+Firefox 153+, Safari 27+). Uncached files of the image need the asset host. See the
+[docs](https://jansim.github.io/quarto-os/#limitations).
 
 ## Development
 
 ```
 _extensions/quarto-os/   the extension (Lua filter, core JS/CSS, apps/, vm/, vendor/)
-agent/                   C source of the in-VM agent + build script
 examples/                example pages (rendered to GitHub Pages)
 index.qmd, _quarto.yml   docs site
+dev/vm/                  VM asset build (unkernel runtime, guest image, Monaco)
 dev/                     test harnesses and a static dev server
 ```
 
-- **Build the agent** (static i386 binary, cross-compiled with [zig](https://ziglang.org)):
-  `agent/build.sh` writes `_extensions/quarto-os/vm/qos-agent` (commit the result). It
-  uses `zig` from `PATH`; with the PyPI package use `ZIG="python -m ziglang" agent/build.sh`.
+- **Build the VM assets** (Node 24+): `npm ci --prefix dev/vm && node dev/vm/build.mjs`
+  writes the ignored `vm-assets/` in about half a minute. It sets up the guest inside
+  unkernel itself, so no Docker or cross compiler is needed. Add tools to the image
+  with `--packages "python3 nano"` (Alpine package names). With an `mkfs.erofs` that
+  has zstd (erofs-utils ≥ 1.8; `MKFS_EROFS=/path/to/mkfs.erofs`) the image is
+  compressed, otherwise it is about twice as large (fine for offline use).
+- **Self-contained / offline site**: build the assets, then render with
+  `vm: asset-base: vm-assets/` and `resources: [vm-assets/]` in `_quarto.yml` (as this
+  repository's docs do). The runtime, guest, Monaco and xterm.js then all come from the
+  site itself; only on-demand package installs need the internet.
 - **Render the docs site**: `quarto render` (outputs to `_site/`).
-- **Build the open VM assets** (Docker + Node + curl): `bash dev/v86/prepare.sh`.
-  The slim guest loads files on demand; the clean snapshot path downloads about
-  25 MiB of VM assets before readiness in the local measurements. `V86_GUEST_PROFILE=full bash dev/v86/prepare.sh` retains
-  optional Perl/Git helpers; configure `vm.memory: 1024` for that larger guest.
-  This writes ignored `vm-assets/` with the runtime, guest and exact upstream source links.
-  See [the build guide](dev/v86/README.md) for proxy support and tests.
 - **Serve it locally**: `node dev/server.mjs _site 8000 nocoi`.
+- **Test**: with `node dev/server.mjs . 8203 nocoi` running, `node dev/vm-test.mjs`
+  and `node dev/apps-e2e.mjs --real`.
 
 - **Regenerate the demo assets** (image + looping video, needs ffmpeg + Playwright):
   `node dev/docs-assets.mjs`; the README screenshot comes from
@@ -154,11 +163,9 @@ set **Settings → Pages → Build and deployment → Source** to **GitHub Actio
 
 ## Licensing
 
-- [v86](https://github.com/copy/v86) is BSD-2-Clause licensed, with separately
-  licensed dependencies. Commercial use does not require a proprietary VM license.
-- SeaBIOS firmware is LGPL-3.0. The Debian guest retains each package's license,
-  including Linux, Git, Bash and BusyBox copyleft licenses. The build publishes
-  links to exact source packages and firmware sources, plus notices and build instructions at
-  [VM sources and licenses](https://jansim.github.io/quarto-os/vm-assets/).
-- xterm.js, Monaco Editor and the Noble Hashes SHA-256 fallback are MIT licensed. The demo images and video were
+- [unkernel](https://github.com/pithings/unkernel): its SDK is MIT licensed and its
+  kernel GPL-2.0. The Alpine guest packages keep their own licenses (Linux, Git, Bash
+  and BusyBox are copyleft). The VM assets include `SOURCES.txt` with source links
+  and `packages.txt` with exact package versions.
+- xterm.js and Monaco Editor are MIT licensed. The demo images and video were
   generated for this project.

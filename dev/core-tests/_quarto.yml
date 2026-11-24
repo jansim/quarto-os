@@ -1,2 +1,6 @@
 project:
   type: default
+# The dev server serves the repository root, which holds the built VM assets.
+quarto-os:
+  vm:
+    asset-base: /vm-assets/

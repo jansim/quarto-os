@@ -34,45 +34,40 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: dev/v86/package-lock.json
+          cache-dependency-path: dev/vm/package-lock.json
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: agent/requirements-build.txt
+      - name: Install VM build and test tools
+        run: npm ci --prefix dev/vm
 
-      - name: Build Linux agent
-        run: |
-          python -m pip install -r agent/requirements-build.txt
-          ZIG="python -m ziglang" sh agent/build.sh
-
-      # Refresh rolling Debian packages on the first build of each UTC ISO week.
-      # No restore prefix: all publication assets must match the build inputs.
+      # Rebuild weekly to pick up Alpine package updates. No restore prefix: the
+      # published assets must match the build inputs.
       - name: Select VM cache generation
         id: vm-generation
         run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache VM publication assets
+      - name: Cache VM assets
         id: vm-assets
         uses: actions/cache@v4
         with:
           path: vm-assets
-          key: vm-assets-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vm-generation.outputs.week }}-${{ hashFiles('dev/v86/Dockerfile', 'dev/v86/.dockerignore', 'dev/v86/init', 'dev/v86/boot-init', 'dev/v86/bookworm-kernel.*', 'dev/v86/*.sh', 'dev/v86/build-boot-state.mjs', 'dev/v86/source-links.mjs', 'dev/v86/package*.json', 'dev/v86/tools/**') }}
+          key: vm-assets-v3-python3-${{ steps.vm-generation.outputs.week }}-${{ hashFiles('dev/vm/build.mjs', 'dev/vm/package-lock.json') }}
 
-      - name: Build v86 runtime, guest and source links
+      # The guest kernel reads zstd erofs; Ubuntu's erofs-utils has no zstd.
+      - name: Build mkfs.erofs with zstd
         if: steps.vm-assets.outputs.cache-hit != 'true'
-        run: bash dev/v86/prepare.sh
+        run: |
+          sudo apt-get install -y -q libzstd-dev uuid-dev autoconf automake libtool pkg-config
+          curl -fsSLo /tmp/erofs-utils.tar.gz https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git/snapshot/erofs-utils-1.8.10.tar.gz
+          echo "05eb4edebe11decce6ecb34e98d2f80c8cd283c2f2967d8ba7efd58418570514  /tmp/erofs-utils.tar.gz" | sha256sum -c
+          tar -C /tmp -xzf /tmp/erofs-utils.tar.gz && cd /tmp/erofs-utils-1.8.10
+          ./autogen.sh && ./configure -q --with-libzstd --disable-fuse && make -s -j4 -C lib && make -s -C mkfs
+          echo "MKFS_EROFS=$PWD/mkfs/mkfs.erofs" >> "$GITHUB_ENV"
 
-      - name: Install tools for cached VM assets
-        if: steps.vm-assets.outputs.cache-hit == 'true'
-        run: bash dev/v86/install-tools.sh
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dev/v86/package-lock.json') }}
+      # The examples teach Python, so the published guest also has python3
+      # (read on demand: no extra download at boot). Other tools install on first use.
+      - name: Build VM assets (unkernel runtime, guest image, Monaco)
+        if: steps.vm-assets.outputs.cache-hit != 'true'
+        run: node dev/vm/build.mjs --packages python3
 
       - name: Prepare browser fixtures
         run: |
@@ -80,7 +75,7 @@ jobs:
           quarto render dev/core-tests/slides.qmd
           quarto render dev/core-tests/doc.qmd
           node dev/apps-mkslides.mjs
-          dev/v86/out/node_modules/.bin/playwright install --with-deps chromium
+          dev/vm/node_modules/.bin/playwright install --with-deps chromium
 
       - name: Test real VM and applications
         run: |
@@ -88,11 +83,7 @@ jobs:
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           node dev/window-layout.mjs --port 8203
-          node --test dev/v86/hash.test.mjs dev/v86/source-links.test.mjs
-          node dev/vm-test.mjs --port 8203 --suite all
-          node dev/v86/lifecycle.mjs --port 8203
-          node dev/v86/startup.mjs --port 8203
-          node dev/v86/http-origin.mjs --port 8203
+          node dev/vm-test.mjs --port 8203
           node dev/apps-e2e.mjs --port 8203 --real
 
       - name: Render site

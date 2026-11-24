@@ -1,0 +1,11 @@
+{
+  "name": "quarto-os-vm-build",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "monaco-editor": "0.52.2",
+    "playwright": "1.62.0",
+    "unkernel": "0.2.0-261124-c08e977"
+  }
+}

@@ -1,5 +1,5 @@
-// Shared browser tooling for development suites; prepare.sh installs the default.
-const module = process.env.PLAYWRIGHT_MODULE || new URL('./v86/out/node_modules/playwright/index.mjs', import.meta.url).href;
+// Shared browser tooling for development suites (npm ci --prefix dev/vm installs it).
+const module = process.env.PLAYWRIGHT_MODULE || new URL('./vm/node_modules/playwright/index.mjs', import.meta.url).href;
 const {chromium: original} = await import(module);
 export const chromium = new Proxy(original, {
   get(target, key) {

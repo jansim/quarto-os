@@ -10,14 +10,14 @@ A Quarto extension (`_extensions/quarto-os/`) that renders macOS-style windows
 websites and reveal.js slides. Windows hold arbitrary content (images, video,
 code blocks, markdown) or "apps": a terminal, a VS Code-like editor and a
 Finder-like file explorer, all backed by ONE shared headless Linux VM per page
-(v86, BSD-2-Clause; headless Linux). Optional fake desktop (wallpaper, menubar, dock) that launches windows,
+(unkernel: a Linux kernel compiled to WebAssembly). Optional fake desktop (wallpaper, menubar, dock) that launches windows,
 multiple instances of the same app allowed. Built for teaching (e.g. git in
 the terminal + VS Code + explorer showing `.git`).
 
 Bundle size matters: the core (`quarto-os.js` + `quarto-os.css`) must stay
 small (target < 60 KB unminified total) and is the only thing loaded on every
 page. Everything heavy is lazy-loaded the first time it's needed:
-xterm (vendored), Monaco (CDN), v86 (project-hosted assets), the VM layer.
+xterm (vendored), Monaco and unkernel (VM assets, see dev/vm/), the VM layer.
 
 ## File layout / ownership
 
@@ -33,8 +33,7 @@ _extensions/quarto-os/
   apps/apps.css           apps   (lazy-loaded by the apps themselves)
   vendor/xterm/...        apps   (xterm.js + fit addon + css, vendored)
   vm/vm.js                vm     (ES module)
-  vm/qos-agent            vm     (static i386 binary, built from agent/)
-agent/                    vm     (C source + build script for qos-agent)
+dev/vm/build.mjs          vm     (builds vm-assets/: unkernel runtime, guest image, Monaco)
 dev/                      test harnesses (prefix your files: vm-*, core-*, apps-*)
 dev/server.mjs            shared static server WITH COOP/COEP headers + Range
                           support: `node dev/server.mjs <root> <port>`
@@ -124,10 +123,11 @@ quarto-os:
   theme: light            # default chrome theme (light|dark)
   vm:
     asset-base: https://jansim.github.io/quarto-os/vm-assets/
-    memory: 1024
+    memory: 512
     boot-timeout: 120000
-    persist: false        # keep VM disk changes across reloads (IndexedDB)
-    cache-id: quarto-os   # IndexedDB name for the overlay
+    network: true         # Wisp relay for on-demand installs (true | false | wss:// URL)
+    persist: false        # keep VM file changes across reloads (IndexedDB)
+    cache-id: quarto-os   # IndexedDB name for those changes
     autoboot: false       # boot on page load instead of on first VM window
     setup: |              # bash script run once per (fresh) VM as `user` before apps attach
       mkdir -p ~/repo
@@ -199,9 +199,9 @@ reuses `apps/terminal.js` (export a helper such as `createTerminal(el, opts, os)
 
 ```js
 export async function createVM(config /* QuartoOS.config.vm */, { baseUrl }) → vm
-vm.ready                    // Promise resolved when the agent is up
+vm.ready                    // Promise resolved when the guest answers
 vm.home                     // "/home/user"
-vm.on('status', cb)         // boot progress strings, e.g. "Loading v86…"
+vm.on('status', cb)         // boot progress strings, e.g. "Booting Linux…"
 vm.on('activity', cb)       // debounced after terminal output/exec, used to refresh views
 vm.openSession({cols, rows, cwd, cmd, env}) → Promise<Session>   // pty running bash -l (or cmd)
   session.write(str | Uint8Array); session.resize(cols, rows)
@@ -213,7 +213,8 @@ vm.writeFile(path, data /* string|Uint8Array */) → Promise<void>
 vm.exec(cmd, {cwd}) → Promise<{code, output}>   // sh -c as user, stdout+stderr merged
 vm.mkdir(path); vm.remove(path /* recursive */); vm.rename(from, to)
 vm.watch(dir, cb) → unsubscribe   // cb(entries) when the listing changes (polling, nudged by 'activity')
-vm.reset()        // wipe the IndexedDB overlay and reload the page
+vm.save()         // with persist: flush file changes to IndexedDB now
+vm.reset()        // wipe the persisted changes and reload the page
 ```
 
 `~` in any path argument expands to `vm.home`. Errors reject with `Error`
@@ -221,7 +222,8 @@ whose message is human readable.
 
 ## Runtime implementation
 
-The v86 backend and guest build now implement this contract. See
-[dev/v86/README.md](v86/README.md) and [agent/README.md](../agent/README.md)
-for assets, persistence and protocol version 3. Six logical slots map to Linux
-PTYs, not hardware virtual terminals. No COOP/COEP or service worker is required.
+`vm/vm.js` runs [unkernel](https://github.com/pithings/unkernel): sessions are guest
+ptys (`spawn`), file operations and `exec()` are guest programs (`exec`/`spawn` over
+vsock), and `persist` uses unkernel's IndexedDB data disk. `dev/vm/build.mjs`
+builds the guest (unkernel's Alpine image + bash, git) inside unkernel itself.
+No COOP/COEP or service worker is required.

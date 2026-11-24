@@ -8,9 +8,8 @@ import {
 } from './common.js';
 import { createTerminal } from './terminal.js';
 
-import { MONACO_VERSION } from './versions.js';
+import { MONACO_VERSION, ASSET_BASE } from './versions.js';
 export { MONACO_VERSION };
-const DEFAULT_VS = `https://cdn.jsdelivr.net/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
 const EDITOR_FONT = 'Menlo, Monaco, "SF Mono", Consolas, "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace';
 const THEME = 'qos-dark-modern';
 const MOD = isMac ? '⌘' : 'Ctrl+';
@@ -18,9 +17,11 @@ const HIDE = new Set(['.git', '.DS_Store', 'Thumbs.db', '.svn', '.hg']);   // VS
 
 // ------------------------------------------------------------------ Monaco loader (once per page)
 let monacoP = null;
+// Monaco comes with the VM assets (vm.asset-base) unless cdn.monaco names another copy.
 function vsBase(os) {
-  const c = os && os.config && os.config.cdn && os.config.cdn.monaco;
-  return String(c || DEFAULT_VS).replace(/\/+$/, '');
+  const c = (os && os.config) || {};
+  const assets = new URL(String((c.vm && c.vm.assetBase) || ASSET_BASE).replace(/\/?$/, '/'), document.baseURI);
+  return new URL((c.cdn && c.cdn.monaco) || 'monaco/vs', assets).href.replace(/\/+$/, '');
 }
 export function loadMonaco(os) {
   if (window.monaco && window.monaco.editor) return Promise.resolve(window.monaco);

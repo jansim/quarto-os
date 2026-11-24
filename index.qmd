@@ -89,8 +89,9 @@ floating and draggable.
 
 ::: {.feature}
 ### A real terminal
-`bash` in a Debian VM powered by [v86](https://github.com/copy/v86). `git`, `python3`,
-the usual command-line tools just work — offline, in the browser.
+`bash` on a real Linux kernel compiled to WebAssembly
+([unkernel](https://github.com/pithings/unkernel)). `git` and `python3` are ready at
+once; other tools install the first time you type them.
 :::
 
 ::: {.feature}
@@ -110,7 +111,7 @@ full reveal.js support.
 ## Try it {#try-it}
 
 This is a small desktop. Drag the windows, then click an icon in the dock to open a
-terminal, the editor or the file explorer. The first VM app you open boots a Debian VM
+terminal, the editor or the file explorer. The first VM app you open boots Linux
 in your browser (it downloads a few megabytes on the first visit), every further app
 attaches to the same machine.
 
@@ -215,14 +216,14 @@ Click to run it: `python3 -c 'print("Hello from Linux!")'`{.os-run target="shell
 
 Render or preview as usual (`quarto preview my-lesson.qmd`). The first window is pure
 HTML/CSS. The second one is a real terminal: the page lazily loads the VM, boots
-Debian and starts `bash`. Clicking the snippet types the command into the terminal and
+Linux and starts `bash`. Clicking the snippet types the command into the terminal and
 presses <kbd>Enter</kbd>.
 
 ::: {.callout-tip}
 ## Previewing locally
 The VM works with `quarto preview` and ordinary static hosting. No isolation headers
 or service-worker reload are needed. Building this repository locally also requires
-`bash dev/v86/prepare.sh` to generate the VM assets.
+`npm ci --prefix dev/vm && node dev/vm/build.mjs` to generate the VM assets.
 :::
 
 ## Reference {#reference}
@@ -360,9 +361,9 @@ quarto-os:
   vm:
     asset-base: https://jansim.github.io/quarto-os/vm-assets/
     memory: 512           # guest RAM in MiB
-    boot-snapshot: true  # restore the prebuilt clean boot state
     boot-timeout: 120000  # milliseconds
-    persist: false        # keep disk changes across reloads (IndexedDB)
+    network: true         # guest internet for on-demand installs (true | false | wss:// relay)
+    persist: false        # keep file changes across reloads (IndexedDB)
     cache-id: quarto-os   # IndexedDB cache name
     autoboot: false       # boot on page load instead of on the first VM window
     setup: |              # bash script, run once per fresh VM as `user`
@@ -372,12 +373,12 @@ quarto-os:
 | Option | Default | Meaning |
 |----------|----------|------------------------------------|
 | `theme` | `light` | Default window chrome theme |
-| `vm.asset-base` | Project-hosted VM assets | Base URL containing the runtime, firmware, kernel, boot snapshot, filesystem and manifest; relative paths resolve from the Quarto project root |
-| `vm.memory` | `512` | Guest RAM in MiB (256–2048); use 1024 for the optional full guest |
-| `vm.boot-snapshot` | `true` | Restore the prebuilt clean state; missing/corrupt states or mismatched memory report an error. Set false for kernel boot with on-demand files |
+| `vm.asset-base` | Project-hosted VM assets | Base URL of the files `dev/vm/build.mjs` writes: unkernel runtime, guest image, Monaco and manifest. Relative paths resolve from the Quarto project root; host them with your site for an offline, self-contained build |
+| `vm.memory` | `512` | Guest RAM in MiB (128–2048) |
 | `vm.boot-timeout` | `120000` | Maximum boot time in milliseconds |
-| `vm.persist` | `false` | Keep compressed machine snapshots in IndexedDB; call `await vm.save()` before leaving when the latest changes must be retained |
-| `vm.cache-id` | `quarto-os` | Cache name; use separate ids for unrelated lessons. Runtime/image/agent changes invalidate snapshots |
+| `vm.network` | `true` | Guest internet through a [Wisp](https://github.com/MercuryWorkshop/wisp-protocol) relay, used to install missing commands: `true` (unkernel's relay, known origins only), `false`, or your relay's `wss://` URL |
+| `vm.persist` | `false` | Keep the guest's file changes (home, installed packages) in IndexedDB. They are written about every second; `await vm.save()` flushes at once |
+| `vm.cache-id` | `quarto-os` | Cache name; use separate ids for unrelated lessons |
 | `vm.autoboot` | `false` | Boot the VM as soon as the page loads |
 | `vm.setup` | — | Shell script run once in a fresh VM before any app attaches. Perfect for `git config`, sample files and folders |
 
@@ -400,25 +401,28 @@ const { output } = await vm.exec("wc -c notes.txt", { cwd: "~" });
 
 ## How the VM works {#how-it-works}
 
-**Open emulator in the browser.** [v86](https://github.com/copy/v86), licensed under
-BSD-2-Clause, boots an actual Debian i386 Linux kernel in WebAssembly. Bash, Git
-and Python run locally in the reader's browser. No application server or guest
-network is involved.
+**A real Linux kernel in WebAssembly.** [unkernel](https://github.com/pithings/unkernel)
+compiles Linux itself to WebAssembly; only user programs (Alpine Linux, aarch64) run on
+an emulated CPU with a JIT. It boots in well under a second. Bash, Git and Python run
+locally in the reader's browser; no application server is involved.
 
-**One VM per page.** All apps share the same filesystem and processes. The small
-`qos-agent` runs as `user` (uid 1000), handles files and commands, and gives each
-terminal an independent Linux PTY. Serial frames multiplex the terminals and file
-operations; flow control prevents large pastes from overflowing the serial device.
+**One VM per page.** All apps share the same filesystem and processes. Every terminal
+is its own Linux pty with job control; the explorer and editor read and write files
+through small guest commands, run as `user` (uid 1000).
 
-**Persistence.** Changes vanish on reload unless `vm.persist` is enabled. Compressed
-machine snapshots include mutable host–guest files and commit atomically to
-IndexedDB. `await vm.save()` explicitly checkpoints changes. Restoring a snapshot
-closes old terminal processes and reapplies defaults/setup before opening new ones.
-Rebuilding the runtime, guest or agent invalidates older snapshots.
+**Tools on demand.** The guest image holds `bash` and `git` (this site's also has
+`python3`). Type a command it lacks, such as `htop` or `nano`, and the terminal installs
+it with `apk`, as on [unkernel.dev](https://unkernel.dev). Installing needs the guest
+network (`vm.network`); a lesson that must work offline can bake its tools into the
+image with `node dev/vm/build.mjs --packages "…"`.
 
-**Lazy loading and static hosting.** Content windows load only the small core. v86,
-xterm.js and Monaco load when apps need them. Ordinary static hosting works without
-cross-origin isolation, a VM disk WebSocket or a first-visit service-worker reload.
+**Persistence.** Changes vanish on reload unless `vm.persist` is enabled. The guest's
+file changes then go to IndexedDB about every second; running processes start fresh.
+
+**Lazy loading and static hosting.** Content windows load only the small core. The VM,
+xterm.js and Monaco load when apps need them, and the guest image is read in pieces
+as programs need them. Ordinary static hosting works without cross-origin isolation or
+a service worker. Host the VM assets with your site and it works offline.
 
 ## Teaching tips {#teaching-tips}
 
@@ -440,31 +444,23 @@ cross-origin isolation, a VM disk WebSocket or a first-visit service-worker relo
 
 ## Limitations {#limitations}
 
-- **Six terminals per page**, including integrated editor terminals. Each has its
-  own PTY, dimensions and job control; a seventh asks you to close one first.
-- **No guest network.** Prepare files with `vm.setup` or build a custom guest.
-- **Slim tool selection.** Bash, Python and offline core Git workflows are included.
-  Optional Perl-based Git tools and network helpers are omitted. Build with
-  `V86_GUEST_PROFILE=full` and configure `vm.memory: 1024` if your lesson needs them.
-- **Initial download and memory.** The slim guest reserves 512 MiB of RAM. A clean boot
-  snapshot skips kernel startup; root files download on demand. Uncached files need
-  access to the static asset host after boot. Snapshot restoration needs additional temporary memory. Startup depends on
-  device speed and download bandwidth. Saved snapshots take additional storage and are not portable between
-  runtime, image or agent versions.
-- **Saving before navigation.** Persistence checkpoints after activity and attempts
-  a save on page exit. Browsers can terminate a page before asynchronous work finishes;
-  await `vm.save()` when the latest changes must be durable.
-- **Browsers.** Recent Chromium and Firefox are recommended. Phones and other
-  memory-constrained devices may be slow or unable to run the guest.
+- **Browsers.** The VM needs JSPI: Chrome/Edge 137+, Firefox 153+ or Safari 27+. Older
+  browsers show an error in the VM windows.
+- **Installing tools needs the network.** The default Wisp relay only accepts known
+  origins; set `vm.network` to your own relay, or bake the tools into the image.
+- **Downloads.** About 5 MB of runtime plus the parts of the guest image that programs
+  read. Uncached parts of the image need the asset host after boot.
+- **Saving before navigation.** File changes are written about every second and on
+  page exit; await `vm.save()` when the latest changes must be durable.
+- **Devices.** Phones and other memory-constrained devices may be slow.
 
 ## Licensing {#licensing}
 
-The VM emulator, [v86](https://github.com/copy/v86), is BSD-2-Clause licensed and
-permits commercial use. Its dependencies retain their own notices. SeaBIOS is
-LGPL-3.0, and the Debian guest packages retain their individual licenses, including
-Linux, Bash, Git and BusyBox copyleft licenses. Links to exact upstream source archives, version
-inventories, license texts and local build scripts are published with the
-[VM assets](vm-assets/index.html). xterm.js and Monaco Editor are MIT licensed.
+The VM, [unkernel](https://github.com/pithings/unkernel), has an MIT licensed SDK and
+a GPL-2.0 kernel. The Alpine guest packages keep their individual licenses, including
+Linux, Bash, Git and BusyBox copyleft licenses; the [VM assets](vm-assets/SOURCES.txt)
+list their sources and [exact versions](vm-assets/packages.txt). xterm.js and Monaco
+Editor are MIT licensed.
 
 The demo images and the video on this site were generated for it and may be reused
 freely.

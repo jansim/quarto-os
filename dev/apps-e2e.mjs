@@ -3,7 +3,7 @@
 //   node dev/apps-mkslides.mjs            (builds dev/apps-slides.html from dev/core-tests/slides.html)
 //   node dev/apps-e2e.mjs [--real] [--shots DIR] [--port 8203]
 // Default: harness (dev/apps-test.html) + in-memory mock VM, plus the real core in a reveal deck.
-// --real: additionally runs a smoke test against vm/vm.js (v86; local assets, ~25-30 s boot).
+// --real: additionally runs a smoke test against vm/vm.js (unkernel; local vm-assets/, boots in ~1 s).
 import { chromium } from './playwright.mjs';
 import fs from 'node:fs';
 
